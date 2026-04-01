@@ -8,6 +8,7 @@ retailer_name: string | null
 purchase_datetime: string
 raw_text: string | null
 image_url: string | null
+total: number | null
 created_at: string
 }
 export type ReceiptItem = {
@@ -19,6 +20,7 @@ quantity: number
 unit: string
 category: string | null
 confidence: number
+price: number | null
 created_at: string
 }
 export type InventoryItem = {
@@ -55,6 +57,7 @@ category: string | null
 expiry_date: string | null
 selected: boolean
 confidence: number
+price: number | null
 }
 export type ParsedReceiptItem = {
 raw_text: string
@@ -63,8 +66,10 @@ quantity: number
 unit: string
 category: string
 confidence: number
+price: number | null
 }
 export type ParsedReceipt = {
 retailer_name: string
+total: number | null
 items: ParsedReceiptItem[]
 }
