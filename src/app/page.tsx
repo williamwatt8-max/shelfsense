@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { ReviewItem, StorageLocation } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
@@ -11,6 +11,7 @@ export default function Home() {
   const [total, setTotal] = useState<number | null>(null)
   const [items, setItems] = useState<ReviewItem[]>([])
   const [preview, setPreview] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -79,20 +80,6 @@ export default function Home() {
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
   }
 
-  const btnStyle: React.CSSProperties = {
-    background: 'linear-gradient(135deg, #ff7043, #ff9a3c)',
-    color: 'white',
-    fontFamily: "'Fredoka One', cursive",
-    fontSize: '20px',
-    padding: '18px 48px',
-    borderRadius: '50px',
-    border: 'none',
-    cursor: 'pointer',
-    boxShadow: '0 8px 24px rgba(255,112,67,0.4)',
-    display: 'inline-block',
-    letterSpacing: '0.5px',
-  }
-
   if (step === 'upload') {
     return (
       <main style={{...warmStyle, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'24px', position:'relative', overflow:'hidden'}}>
@@ -106,10 +93,17 @@ export default function Home() {
           .nav-link{color:#aaa;font-size:14px;font-weight:700;text-decoration:none;transition:color 0.2s;font-family:'Nunito',sans-serif;}
           .nav-link:hover{color:#ff7043;}
           .feature-pill{background:white;border-radius:20px;padding:10px 18px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:#555;box-shadow:0 4px 12px rgba(0,0,0,0.08);}
-          .scan-label{background:linear-gradient(135deg,#ff7043,#ff9a3c);color:white;font-family:'Fredoka One',cursive;font-size:20px;padding:18px 48px;border-radius:50px;cursor:pointer;box-shadow:0 8px 24px rgba(255,112,67,0.4);display:inline-block;letter-spacing:0.5px;transition:transform 0.2s,box-shadow 0.2s;}
-          .scan-label:hover{transform:translateY(-3px) scale(1.03);box-shadow:0 12px 32px rgba(255,112,67,0.5);}
         `}</style>
         <div className="blob1"/><div className="blob2"/>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleFileChange}
+          disabled={loading}
+          style={{display:'none'}}
+        />
         <div style={{position:'relative',zIndex:1,display:'flex',flexDirection:'column',alignItems:'center'}}>
           <div style={{fontSize:'72px',marginBottom:'8px',animation:'float 4s ease-in-out infinite'}}>🛒</div>
           <h1 style={{fontFamily:"'Fredoka One',cursive",fontSize:'52px',color:'#2d2d2d',margin:'0 0 8px',letterSpacing:'1px',lineHeight:1}}>ShelfSense</h1>
@@ -122,10 +116,13 @@ export default function Home() {
           {preview && <img src={preview} alt="Receipt" style={{maxWidth:'180px',maxHeight:'160px',borderRadius:'16px',marginBottom:'24px',boxShadow:'0 8px 24px rgba(0,0,0,0.15)'}} />}
           <div style={{position:'relative',marginBottom:'16px'}}>
             <div className="pulse-ring"/>
-            <label className="scan-label">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading}
+              style={{background:'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',fontFamily:"'Fredoka One',cursive",fontSize:'20px',padding:'18px 48px',borderRadius:'50px',border:'none',cursor:'pointer',boxShadow:'0 8px 24px rgba(255,112,67,0.4)',letterSpacing:'0.5px'}}
+            >
               {loading ? '✨ Scanning...' : '📷 Scan a Receipt'}
-              <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} disabled={loading} style={{display:'none'}} />
-            </label>
+            </button>
           </div>
           {loading && <p style={{color:'#ff7043',fontWeight:700,fontSize:'15px',fontFamily:"'Nunito',sans-serif"}}>AI is reading your receipt...</p>}
           <div style={{display:'flex',gap:'24px',marginTop:'40px'}}>
