@@ -78,7 +78,6 @@ export default function Home() {
     fontFamily: "'Nunito', sans-serif",
     minHeight: '100vh',
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
-    paddingBottom: '100px',
   }
 
   if (step === 'upload') {
@@ -122,10 +121,6 @@ export default function Home() {
             </label>
           </div>
           {loading && <p style={{color:'#ff7043',fontWeight:700,fontSize:'15px',fontFamily:"'Nunito',sans-serif"}}>AI is reading your receipt...</p>}
-          <div style={{display:'flex',gap:'24px',marginTop:'40px'}}>
-            <a href="/inventory" className="nav-link">📦 Inventory</a>
-            <a href="/spend" className="nav-link">💳 Spend History</a>
-          </div>
         </div>
       </main>
     )
@@ -133,7 +128,7 @@ export default function Home() {
 
   if (step === 'reviewing') {
     return (
-      <main style={{...warmStyle, padding:'24px'}}>
+      <main style={{...warmStyle, padding:'72px 24px 32px'}}>
         <style>{`@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');`}</style>
         <div style={{maxWidth:'640px',margin:'0 auto'}}>
           <a href="/" style={{color:'#ff7043',fontWeight:700,fontSize:'14px',textDecoration:'none',fontFamily:"'Nunito',sans-serif"}}>← Back</a>
@@ -156,6 +151,7 @@ export default function Home() {
                     <option value="fridge">Fridge</option>
                     <option value="freezer">Freezer</option>
                     <option value="cupboard">Cupboard</option>
+                    <option value="household">Household</option>
                     <option value="other">Other</option>
                   </select>
                   <input type="date" value={item.expiry_date || ''} onChange={(e) => { const updated = [...items]; updated[index].expiry_date = e.target.value || null; setItems(updated) }} style={{border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />

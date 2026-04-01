@@ -1,5 +1,5 @@
 export type InventoryStatus = 'active' | 'used' | 'discarded' | 'expired'
-export type StorageLocation = 'fridge' | 'freezer' | 'cupboard' | 'other'
+export type StorageLocation = 'fridge' | 'freezer' | 'cupboard' | 'other' | 'household'
 export type EventType = 'added' | 'used' | 'used_some' | 'moved' | 'discarded' | 'expired'
 export type Receipt = {
 id: string

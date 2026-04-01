@@ -161,10 +161,15 @@ export default function InventoryPage() {
     fontFamily: "'Nunito', sans-serif",
     minHeight: '100vh',
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
-    padding: '24px 24px 100px',
+    padding: '72px 24px 32px',
   }
 
-  const filters = ['all', 'fridge', 'freezer', 'cupboard', 'expiring']
+  const expiringCount = items.filter((item) => {
+    const d = daysLeft(item.expiry_date)
+    return d !== null && d >= 0 && d <= 7
+  }).length
+
+  const filters = ['all', 'fridge', 'freezer', 'cupboard', 'household', 'expiring']
   const units = ['item','g','kg','ml','l','bottle','tin','loaf','pack','bag','head','fillet']
 
   const actionButtons = (item: InventoryItem) => (
@@ -176,6 +181,7 @@ export default function InventoryPage() {
         <option value="fridge">Fridge</option>
         <option value="freezer">Freezer</option>
         <option value="cupboard">Cupboard</option>
+        <option value="household">Household</option>
         <option value="other">Other</option>
       </select>
     </div>
@@ -218,7 +224,7 @@ export default function InventoryPage() {
         .item-row:active{transform:scale(0.99);}
       `}</style>
       <div style={{maxWidth:'640px',margin:'0 auto'}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'20px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'12px'}}>
           <div>
             <h1 style={{fontFamily:"'Fredoka One',cursive",fontSize:'36px',color:'#2d2d2d',margin:0}}>Your Inventory</h1>
             <p style={{color:'#aaa',fontWeight:700,fontSize:'13px',margin:0}}>{items.length} items tracked</p>
@@ -228,12 +234,39 @@ export default function InventoryPage() {
           </a>
         </div>
 
+        {expiringCount > 0 && (
+          <button
+            onClick={() => setFilter('expiring')}
+            style={{display:'flex',alignItems:'center',gap:'10px',width:'100%',background:'linear-gradient(135deg,#fff8f0,#fff3e6)',border:'2px solid rgba(255,112,67,0.25)',borderRadius:'14px',padding:'12px 16px',marginBottom:'16px',cursor:'pointer',textAlign:'left',boxShadow:'0 2px 10px rgba(255,112,67,0.12)'}}
+          >
+            <span style={{fontSize:'24px'}}>⏰</span>
+            <div style={{flex:1}}>
+              <span style={{fontFamily:"'Fredoka One',cursive",fontSize:'16px',color:'#ff7043'}}>
+                {expiringCount} item{expiringCount > 1 ? 's' : ''} expiring within 7 days
+              </span>
+              <p style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'12px',color:'#ffb347',margin:0}}>
+                Tap to view expiring items
+              </p>
+            </div>
+            <span style={{background:'#ff7043',color:'white',fontFamily:"'Fredoka One',cursive",fontSize:'16px',borderRadius:'50px',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              {expiringCount}
+            </span>
+          </button>
+        )}
+
         <div style={{display:'flex',gap:'8px',marginBottom:'12px',flexWrap:'wrap'}}>
-          {filters.map((f) => (
-            <button key={f} onClick={() => setFilter(f)} style={{padding:'7px 14px',borderRadius:'50px',border:'none',cursor:'pointer',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',background: filter === f ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white',color: filter === f ? 'white' : '#888',boxShadow: filter === f ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)'}}>
-              {f === 'all' ? 'All' : f === 'expiring' ? '⏰ Expiring' : f.charAt(0).toUpperCase() + f.slice(1)}
-            </button>
-          ))}
+          {filters.map((f) => {
+            const label =
+              f === 'all'       ? 'All' :
+              f === 'expiring'  ? `⏰ Expiring${expiringCount > 0 ? ` (${expiringCount})` : ''}` :
+              f === 'household' ? '🏠 Household' :
+              f.charAt(0).toUpperCase() + f.slice(1)
+            return (
+              <button key={f} onClick={() => setFilter(f)} style={{padding:'7px 14px',borderRadius:'50px',border:'none',cursor:'pointer',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',background: filter === f ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white',color: filter === f ? 'white' : '#888',boxShadow: filter === f ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)'}}>
+                {label}
+              </button>
+            )
+          })}
         </div>
 
         <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'20px',flexWrap:'wrap'}}>
@@ -262,11 +295,12 @@ export default function InventoryPage() {
                   const isExpanded = expandedId === group.name
                   const hasBatches = group.batches.length > 1
                   return (
-                    <div key={group.name} className="item-row" style={{background:'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+                    <div key={group.name} className="item-row" style={{background: group.location === 'household' ? '#f0f4ff' : 'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden',border: group.location === 'household' ? '1.5px solid rgba(100,120,240,0.15)' : 'none'}}>
                       <div onClick={() => setExpandedId(isExpanded ? null : group.name)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',cursor:'pointer'}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
                             <h3 style={{fontFamily:"'Fredoka One',cursive",fontSize:'17px',color:'#2d2d2d',margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{group.name}</h3>
+                            {group.location === 'household' && <span style={{background:'rgba(100,120,240,0.1)',color:'#6478f0',fontSize:'11px',fontWeight:700,padding:'2px 8px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0}}>🏠 household</span>}
                             {hasBatches && <span style={{background:'#fff5f0',color:'#ff7043',fontSize:'11px',fontWeight:700,padding:'2px 8px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0}}>{group.batches.length} batches</span>}
                           </div>
                           <p style={{color:'#bbb',fontSize:'12px',fontWeight:700,margin:0,fontFamily:"'Nunito',sans-serif"}}>{group.totalQuantity} {group.unit} · {group.location}</p>
@@ -316,10 +350,13 @@ export default function InventoryPage() {
                   const isExpanded = expandedId === item.id
                   const isEditing = editingItem?.id === item.id
                   return (
-                    <div key={item.id} className="item-row" style={{background:'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+                    <div key={item.id} className="item-row" style={{background: item.location === 'household' ? '#f0f4ff' : 'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden',border: item.location === 'household' ? '1.5px solid rgba(100,120,240,0.15)' : 'none'}}>
                       <div onClick={() => setExpandedId(isExpanded ? null : item.id)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',cursor:'pointer'}}>
                         <div style={{flex:1,minWidth:0}}>
-                          <h3 style={{fontFamily:"'Fredoka One',cursive",fontSize:'17px',color:'#2d2d2d',margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</h3>
+                          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                            <h3 style={{fontFamily:"'Fredoka One',cursive",fontSize:'17px',color:'#2d2d2d',margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</h3>
+                            {item.location === 'household' && <span style={{background:'rgba(100,120,240,0.1)',color:'#6478f0',fontSize:'11px',fontWeight:700,padding:'2px 8px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0}}>🏠 household</span>}
+                          </div>
                           <p style={{color:'#bbb',fontSize:'12px',fontWeight:700,margin:0,fontFamily:"'Nunito',sans-serif"}}>{item.quantity} {item.unit} · {item.location}</p>
                         </div>
                         <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>

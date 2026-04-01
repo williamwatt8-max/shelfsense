@@ -61,7 +61,7 @@ export default function SpendPage() {
     fontFamily: "'Nunito', sans-serif",
     minHeight: '100vh',
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
-    padding: '24px 24px 100px',
+    padding: '72px 24px 32px',
   }
 
   const selectStyle = {

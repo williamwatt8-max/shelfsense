@@ -8,7 +8,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <main style={{ ...warmStyle, padding: '24px 24px 100px' }}>
+    <main style={{ ...warmStyle, padding: '72px 24px 32px' }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');`}</style>
       <div style={{ maxWidth: '640px', margin: '0 auto' }}>
         <h1 style={{ fontFamily: "'Fredoka One', cursive", fontSize: '36px', color: '#2d2d2d', margin: '0 0 4px' }}>
