@@ -75,17 +75,46 @@ export default function Home() {
 
   if (step === 'upload') {
     return (
-      <main className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center p-6">
-        <h1 className="text-4xl font-bold mb-2">ShelfSense</h1>
-        <p className="text-gray-400 mb-8">Upload a receipt photo to start tracking your food</p>
-        {preview && <img src={preview} alt="Receipt preview" className="max-w-xs max-h-64 rounded-lg mb-6 border border-gray-700" />}
-        <label className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-3 px-8 rounded-lg text-lg transition-colors cursor-pointer">
-          {loading ? 'Scanning...' : 'Upload Receipt Photo'}
-          <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} disabled={loading} className="hidden" />
-        </label>
-        {loading && <p className="text-gray-500 mt-4 text-sm">AI is reading your receipt...</p>}
-        <a href="/inventory" className="text-gray-500 hover:text-gray-300 mt-8 text-sm">View Inventory</a>
-        <a href="/spend" className="text-gray-500 hover:text-gray-300 mt-2 text-sm">Spend History</a>
+      <main style={{minHeight:'100vh',background:'linear-gradient(135deg,#fdf6ec 0%,#fde8d0 50%,#fce4e4 100%)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'24px',fontFamily:"'Nunito',sans-serif",position:'relative',overflow:'hidden'}}>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
+          @keyframes float { 0%,100%{transform:translateY(0px)} 50%{transform:translateY(-10px)} }
+          @keyframes pulse-ring { 0%{transform:scale(1);opacity:0.4} 100%{transform:scale(1.5);opacity:0} }
+          @keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+          .blob1{position:absolute;top:-80px;left:-80px;width:300px;height:300px;background:rgba(255,180,120,0.3);border-radius:60% 40% 70% 30% / 50% 60% 40% 70%;animation:float 6s ease-in-out infinite;}
+          .blob2{position:absolute;bottom:-60px;right:-60px;width:250px;height:250px;background:rgba(255,150,150,0.25);border-radius:40% 60% 30% 70% / 60% 40% 70% 30%;animation:float 8s ease-in-out infinite reverse;}
+          .blob3{position:absolute;top:40%;left:-40px;width:150px;height:150px;background:rgba(255,220,100,0.2);border-radius:50%;animation:float 7s ease-in-out infinite;}
+          .upload-btn{background:linear-gradient(135deg,#ff7043,#ff9a3c);color:white;font-family:'Fredoka One',cursive;font-size:20px;padding:18px 48px;border-radius:50px;border:none;cursor:pointer;box-shadow:0 8px 24px rgba(255,112,67,0.4),0 2px 8px rgba(0,0,0,0.1);transition:all 0.2s ease;display:inline-block;letter-spacing:0.5px;}
+          .upload-btn:hover{transform:translateY(-3px) scale(1.03);box-shadow:0 12px 32px rgba(255,112,67,0.5),0 4px 12px rgba(0,0,0,0.15);}
+          .pulse-ring{position:absolute;inset:-8px;border-radius:50px;border:3px solid rgba(255,112,67,0.5);animation:pulse-ring 2s ease-out infinite;}
+          .feature-pill{background:white;border-radius:20px;padding:10px 18px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:#555;box-shadow:0 4px 12px rgba(0,0,0,0.08);animation:fadeUp 0.6s ease forwards;}
+          .nav-link{color:#999;font-size:14px;font-weight:600;text-decoration:none;transition:color 0.2s;}
+          .nav-link:hover{color:#ff7043;}
+        `}</style>
+        <div className="blob1"/><div className="blob2"/><div className="blob3"/>
+        <div style={{position:'relative',zIndex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'0'}}>
+          <div style={{fontSize:'72px',marginBottom:'8px',animation:'float 4s ease-in-out infinite'}}>🛒</div>
+          <h1 style={{fontFamily:"'Fredoka One',cursive",fontSize:'52px',color:'#2d2d2d',margin:'0 0 8px',letterSpacing:'1px',lineHeight:1}}>ShelfSense</h1>
+          <p style={{color:'#888',fontSize:'17px',fontWeight:600,margin:'0 0 32px',textAlign:'center',maxWidth:'300px',lineHeight:1.5}}>Snap your receipt. Track your food. Never waste again.</p>
+          <div style={{display:'flex',gap:'10px',marginBottom:'40px',flexWrap:'wrap',justifyContent:'center'}}>
+            <div className="feature-pill" style={{animationDelay:'0.1s'}}>📸 AI Receipt Scanning</div>
+            <div className="feature-pill" style={{animationDelay:'0.2s'}}>⏰ Expiry Tracking</div>
+            <div className="feature-pill" style={{animationDelay:'0.3s'}}>💰 Spend History</div>
+          </div>
+          {preview && <img src={preview} alt="Receipt preview" style={{maxWidth:'200px',maxHeight:'180px',borderRadius:'16px',marginBottom:'24px',boxShadow:'0 8px 24px rgba(0,0,0,0.15)'}} />}
+          <div style={{position:'relative',marginBottom:'12px'}}>
+            <div className="pulse-ring"/>
+            <label className="upload-btn">
+              {loading ? '✨ Scanning...' : '📷 Scan a Receipt'}
+              <input type="file" accept="image/*" capture="environment" onChange={handleFileChange} disabled={loading} style={{display:'none'}} />
+            </label>
+          </div>
+          {loading && <p style={{color:'#ff7043',fontWeight:700,fontSize:'15px',marginTop:'12px',animation:'fadeUp 0.3s ease'}}>AI is reading your receipt...</p>}
+          <div style={{display:'flex',gap:'24px',marginTop:'40px'}}>
+            <a href="/inventory" className="nav-link">📦 Inventory</a>
+            <a href="/spend" className="nav-link">💳 Spend History</a>
+          </div>
+        </div>
       </main>
     )
   }
