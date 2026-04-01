@@ -161,7 +161,7 @@ export default function InventoryPage() {
     fontFamily: "'Nunito', sans-serif",
     minHeight: '100vh',
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
-    padding: '24px',
+    padding: '24px 24px 100px',
   }
 
   const filters = ['all', 'fridge', 'freezer', 'cupboard', 'expiring']

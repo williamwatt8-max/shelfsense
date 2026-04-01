@@ -78,6 +78,7 @@ export default function Home() {
     fontFamily: "'Nunito', sans-serif",
     minHeight: '100vh',
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
+    paddingBottom: '100px',
   }
 
   if (step === 'upload') {
