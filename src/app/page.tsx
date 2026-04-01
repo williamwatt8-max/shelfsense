@@ -95,15 +95,6 @@ export default function Home() {
           .feature-pill{background:white;border-radius:20px;padding:10px 18px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:#555;box-shadow:0 4px 12px rgba(0,0,0,0.08);}
         `}</style>
         <div className="blob1"/><div className="blob2"/>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          onChange={handleFileChange}
-          disabled={loading}
-          style={{display:'none'}}
-        />
         <div style={{position:'relative',zIndex:1,display:'flex',flexDirection:'column',alignItems:'center'}}>
           <div style={{fontSize:'72px',marginBottom:'8px',animation:'float 4s ease-in-out infinite'}}>🛒</div>
           <h1 style={{fontFamily:"'Fredoka One',cursive",fontSize:'52px',color:'#2d2d2d',margin:'0 0 8px',letterSpacing:'1px',lineHeight:1}}>ShelfSense</h1>
@@ -116,13 +107,18 @@ export default function Home() {
           {preview && <img src={preview} alt="Receipt" style={{maxWidth:'180px',maxHeight:'160px',borderRadius:'16px',marginBottom:'24px',boxShadow:'0 8px 24px rgba(0,0,0,0.15)'}} />}
           <div style={{position:'relative',marginBottom:'16px'}}>
             <div className="pulse-ring"/>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={loading}
-              style={{background:'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',fontFamily:"'Fredoka One',cursive",fontSize:'20px',padding:'18px 48px',borderRadius:'50px',border:'none',cursor:'pointer',boxShadow:'0 8px 24px rgba(255,112,67,0.4)',letterSpacing:'0.5px'}}
-            >
+            <label style={{background:'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',fontFamily:"'Fredoka One',cursive",fontSize:'20px',padding:'18px 48px',borderRadius:'50px',cursor:'pointer',boxShadow:'0 8px 24px rgba(255,112,67,0.4)',letterSpacing:'0.5px',display:'inline-block',position:'relative'}}>
               {loading ? '✨ Scanning...' : '📷 Scan a Receipt'}
-            </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileChange}
+                disabled={loading}
+                style={{position:'absolute',inset:0,opacity:0,cursor:'pointer',width:'100%',height:'100%'}}
+              />
+            </label>
           </div>
           {loading && <p style={{color:'#ff7043',fontWeight:700,fontSize:'15px',fontFamily:"'Nunito',sans-serif"}}>AI is reading your receipt...</p>}
           <div style={{display:'flex',gap:'24px',marginTop:'40px'}}>
