@@ -5,10 +5,21 @@ import { supabase } from '@/lib/supabase'
 import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 
+type GroupedItem = {
+  name: string
+  totalQuantity: number
+  unit: string
+  location: string
+  category: string | null
+  nearestExpiry: string | null
+  batches: InventoryItem[]
+}
+
 export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [filter, setFilter] = useState<string>('all')
   const [sortBy, setSortBy] = useState<string>('date_added')
+  const [grouped, setGrouped] = useState<boolean>(true)
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingItem, setEditingItem] = useState<{id:string,quantity:number,unit:string,expiry_date:string} | null>(null)
@@ -84,20 +95,67 @@ export default function InventoryPage() {
     return item.location === filter
   })
 
-  const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'expiry') {
-      const da = daysLeft(a.expiry_date)
-      const db = daysLeft(b.expiry_date)
-      if (da === null && db === null) return 0
-      if (da === null) return 1
-      if (db === null) return -1
-      return da - db
+  function sortItems(arr: InventoryItem[]): InventoryItem[] {
+    return [...arr].sort((a, b) => {
+      if (sortBy === 'expiry') {
+        const da = daysLeft(a.expiry_date)
+        const db = daysLeft(b.expiry_date)
+        if (da === null && db === null) return 0
+        if (da === null) return 1
+        if (db === null) return -1
+        return da - db
+      }
+      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'location') return a.location.localeCompare(b.location)
+      if (sortBy === 'category') return (a.category || '').localeCompare(b.category || '')
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    })
+  }
+
+  function groupItems(arr: InventoryItem[]): GroupedItem[] {
+    const map = new Map<string, GroupedItem>()
+    for (const item of arr) {
+      const key = item.name.toLowerCase().trim()
+      if (map.has(key)) {
+        const g = map.get(key)!
+        g.totalQuantity += item.quantity
+        g.batches.push(item)
+        if (item.expiry_date) {
+          if (!g.nearestExpiry || item.expiry_date < g.nearestExpiry) {
+            g.nearestExpiry = item.expiry_date
+          }
+        }
+      } else {
+        map.set(key, {
+          name: item.name,
+          totalQuantity: item.quantity,
+          unit: item.unit,
+          location: item.location,
+          category: item.category,
+          nearestExpiry: item.expiry_date,
+          batches: [item],
+        })
+      }
     }
-    if (sortBy === 'name') return a.name.localeCompare(b.name)
-    if (sortBy === 'location') return a.location.localeCompare(b.location)
-    if (sortBy === 'category') return (a.category || '').localeCompare(b.category || '')
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  })
+    const groups = Array.from(map.values())
+    return groups.sort((a, b) => {
+      if (sortBy === 'expiry') {
+        const da = daysLeft(a.nearestExpiry)
+        const db = daysLeft(b.nearestExpiry)
+        if (da === null && db === null) return 0
+        if (da === null) return 1
+        if (db === null) return -1
+        return da - db
+      }
+      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'location') return a.location.localeCompare(b.location)
+      if (sortBy === 'category') return (a.category || '').localeCompare(b.category || '')
+      return 0
+    })
+  }
+
+  const sorted = sortItems(filtered)
+  const groupedItems = groupItems(filtered)
 
   const warmStyle = {
     fontFamily: "'Nunito', sans-serif",
@@ -108,6 +166,40 @@ export default function InventoryPage() {
 
   const filters = ['all', 'fridge', 'freezer', 'cupboard', 'expiring']
   const units = ['item','g','kg','ml','l','bottle','tin','loaf','pack','bag','head','fillet']
+
+  const actionButtons = (item: InventoryItem) => (
+    <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'8px'}}>
+      <button onClick={() => markUsed(item.id)} style={{background:'#f0fff4',color:'#4caf50',border:'none',borderRadius:'50px',padding:'7px 16px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>✅ Used up</button>
+      <button onClick={() => markDiscarded(item.id)} style={{background:'#fff0f0',color:'#ff4444',border:'none',borderRadius:'50px',padding:'7px 16px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>🗑️ Discard</button>
+      <button onClick={() => setEditingItem({id:item.id,quantity:item.quantity,unit:item.unit,expiry_date:item.expiry_date||''})} style={{background:'#fff8f0',color:'#ff7043',border:'none',borderRadius:'50px',padding:'7px 16px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>✏️ Edit</button>
+      <select value={item.location} onChange={(e) => changeLocation(item.id, e.target.value)} style={{border:'2px solid #eee',borderRadius:'50px',padding:'6px 12px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#555'}}>
+        <option value="fridge">Fridge</option>
+        <option value="freezer">Freezer</option>
+        <option value="cupboard">Cupboard</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+  )
+
+  const editForm = () => editingItem && (
+    <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'12px',padding:'12px',background:'white',borderRadius:'10px'}}>
+      <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+        <label style={{color:'#aaa',fontSize:'12px',fontWeight:700,fontFamily:"'Nunito',sans-serif",width:'60px'}}>Qty</label>
+        <input type="number" value={editingItem.quantity} onChange={e => setEditingItem({...editingItem,quantity:Number(e.target.value)})} style={{width:'70px',border:'2px solid #eee',borderRadius:'8px',padding:'6px 8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
+        <select value={editingItem.unit} onChange={e => setEditingItem({...editingItem,unit:e.target.value})} style={{border:'2px solid #eee',borderRadius:'8px',padding:'6px 8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}}>
+          {units.map(u => <option key={u} value={u}>{u}</option>)}
+        </select>
+      </div>
+      <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+        <label style={{color:'#aaa',fontSize:'12px',fontWeight:700,fontFamily:"'Nunito',sans-serif",width:'60px'}}>Expiry</label>
+        <input type="date" value={editingItem.expiry_date || ''} onChange={e => setEditingItem({...editingItem,expiry_date:e.target.value})} style={{border:'2px solid #eee',borderRadius:'8px',padding:'6px 8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
+      </div>
+      <div style={{display:'flex',gap:'8px'}}>
+        <button onClick={saveEdit} style={{background:'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',border:'none',borderRadius:'50px',padding:'8px 20px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>Save</button>
+        <button onClick={() => setEditingItem(null)} style={{background:'#f5f5f5',color:'#888',border:'none',borderRadius:'50px',padding:'8px 20px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+      </div>
+    </div>
+  )
 
   if (loading) {
     return (
@@ -122,8 +214,8 @@ export default function InventoryPage() {
     <main style={warmStyle}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
-        .item-row{transition:all 0.2s ease;}
-        .item-row:hover{transform:translateY(-1px);}
+        .item-row{transition:all 0.15s ease;}
+        .item-row:active{transform:scale(0.99);}
       `}</style>
       <div style={{maxWidth:'640px',margin:'0 auto'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'20px'}}>
@@ -144,8 +236,7 @@ export default function InventoryPage() {
           ))}
         </div>
 
-        <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'20px'}}>
-          <span style={{color:'#aaa',fontWeight:700,fontSize:'13px',fontFamily:"'Nunito',sans-serif",whiteSpace:'nowrap'}}>Sort by:</span>
+        <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'20px',flexWrap:'wrap'}}>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{border:'2px solid #eee',borderRadius:'50px',padding:'6px 14px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#555',background:'white',boxShadow:'0 2px 8px rgba(0,0,0,0.06)'}}>
             <option value="date_added">Date Added</option>
             <option value="expiry">Expiry (soonest first)</option>
@@ -153,72 +244,101 @@ export default function InventoryPage() {
             <option value="location">Location</option>
             <option value="category">Category</option>
           </select>
+
+          <button
+            onClick={() => { setGrouped(!grouped); setExpandedId(null) }}
+            style={{padding:'6px 16px',borderRadius:'50px',border:'none',cursor:'pointer',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white',color: grouped ? 'white' : '#888',boxShadow: grouped ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)',transition:'all 0.2s'}}
+          >
+            {grouped ? '⊞ Grouped' : '☰ Ungrouped'}
+          </button>
         </div>
 
-        {sorted.length === 0
-          ? <p style={{color:'#aaa',fontWeight:700,textAlign:'center',marginTop:'48px',fontFamily:"'Nunito',sans-serif"}}>No items found</p>
-          : <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-              {sorted.map((item) => {
-                const d = daysLeft(item.expiry_date)
-                const isExpanded = expandedId === item.id
-                const isEditing = editingItem?.id === item.id
-                return (
-                  <div key={item.id} className="item-row" style={{background:'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden'}}>
-                    <div
-                      onClick={() => setExpandedId(isExpanded ? null : item.id)}
-                      style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',cursor:'pointer'}}
-                    >
-                      <div style={{flex:1,minWidth:0}}>
-                        <h3 style={{fontFamily:"'Fredoka One',cursive",fontSize:'17px',color:'#2d2d2d',margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</h3>
-                        <p style={{color:'#bbb',fontSize:'12px',fontWeight:700,margin:0,fontFamily:"'Nunito',sans-serif"}}>{item.quantity} {item.unit} · {item.location}</p>
+        {grouped ? (
+          groupedItems.length === 0
+            ? <p style={{color:'#aaa',fontWeight:700,textAlign:'center',marginTop:'48px',fontFamily:"'Nunito',sans-serif"}}>No items found</p>
+            : <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+                {groupedItems.map((group) => {
+                  const d = daysLeft(group.nearestExpiry)
+                  const isExpanded = expandedId === group.name
+                  const hasBatches = group.batches.length > 1
+                  return (
+                    <div key={group.name} className="item-row" style={{background:'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+                      <div onClick={() => setExpandedId(isExpanded ? null : group.name)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',cursor:'pointer'}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                            <h3 style={{fontFamily:"'Fredoka One',cursive",fontSize:'17px',color:'#2d2d2d',margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{group.name}</h3>
+                            {hasBatches && <span style={{background:'#fff5f0',color:'#ff7043',fontSize:'11px',fontWeight:700,padding:'2px 8px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0}}>{group.batches.length} batches</span>}
+                          </div>
+                          <p style={{color:'#bbb',fontSize:'12px',fontWeight:700,margin:0,fontFamily:"'Nunito',sans-serif"}}>{group.totalQuantity} {group.unit} · {group.location}</p>
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
+                          <span style={{color:expiryColor(d),fontWeight:800,fontSize:'12px',fontFamily:"'Nunito',sans-serif"}}>{expiryLabel(d)}</span>
+                          <span style={{color:'#ccc',fontSize:'16px'}}>{isExpanded ? '▲' : '▼'}</span>
+                        </div>
                       </div>
-                      <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
-                        <span style={{color:expiryColor(d),fontWeight:800,fontSize:'12px',fontFamily:"'Nunito',sans-serif"}}>{expiryLabel(d)}</span>
-                        <span style={{color:'#ccc',fontSize:'18px'}}>{isExpanded ? '▲' : '▼'}</span>
-                      </div>
-                    </div>
 
-                    {isExpanded && (
-                      <div style={{borderTop:'1px solid #f5f5f5',padding:'12px 16px',background:'#fffaf7'}}>
-                        {isEditing ? (
-                          <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'12px'}}>
-                            <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-                              <label style={{color:'#aaa',fontSize:'12px',fontWeight:700,fontFamily:"'Nunito',sans-serif",width:'60px'}}>Qty</label>
-                              <input type="number" value={editingItem.quantity} onChange={e => setEditingItem({...editingItem,quantity:Number(e.target.value)})} style={{width:'70px',border:'2px solid #eee',borderRadius:'8px',padding:'6px 8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
-                              <select value={editingItem.unit} onChange={e => setEditingItem({...editingItem,unit:e.target.value})} style={{border:'2px solid #eee',borderRadius:'8px',padding:'6px 8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}}>
-                                {units.map(u => <option key={u} value={u}>{u}</option>)}
-                              </select>
+                      {isExpanded && (
+                        <div style={{borderTop:'1px solid #f5f5f5',padding:'12px 16px',background:'#fffaf7'}}>
+                          {hasBatches ? (
+                            <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+                              {group.batches.map((batch, bi) => {
+                                const bd = daysLeft(batch.expiry_date)
+                                const isEditingBatch = editingItem?.id === batch.id
+                                return (
+                                  <div key={batch.id} style={{background:'white',borderRadius:'10px',padding:'10px 12px',border:'1px solid #f0f0f0'}}>
+                                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
+                                      <span style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#555'}}>Batch {bi + 1} — {batch.quantity} {batch.unit}</span>
+                                      <span style={{color:expiryColor(bd),fontWeight:800,fontSize:'12px',fontFamily:"'Nunito',sans-serif"}}>{expiryLabel(bd)}</span>
+                                    </div>
+                                    {isEditingBatch ? editForm() : actionButtons(batch)}
+                                  </div>
+                                )
+                              })}
                             </div>
-                            <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-                              <label style={{color:'#aaa',fontSize:'12px',fontWeight:700,fontFamily:"'Nunito',sans-serif",width:'60px'}}>Expiry</label>
-                              <input type="date" value={editingItem.expiry_date || ''} onChange={e => setEditingItem({...editingItem,expiry_date:e.target.value})} style={{border:'2px solid #eee',borderRadius:'8px',padding:'6px 8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
-                            </div>
-                            <div style={{display:'flex',gap:'8px'}}>
-                              <button onClick={saveEdit} style={{background:'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',border:'none',borderRadius:'50px',padding:'8px 20px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>Save</button>
-                              <button onClick={() => setEditingItem(null)} style={{background:'#f5f5f5',color:'#888',border:'none',borderRadius:'50px',padding:'8px 20px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>Cancel</button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'10px'}}>
-                            <button onClick={() => markUsed(item.id)} style={{background:'#f0fff4',color:'#4caf50',border:'none',borderRadius:'50px',padding:'7px 16px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>✅ Used up</button>
-                            <button onClick={() => markDiscarded(item.id)} style={{background:'#fff0f0',color:'#ff4444',border:'none',borderRadius:'50px',padding:'7px 16px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>🗑️ Discard</button>
-                            <button onClick={() => setEditingItem({id:item.id,quantity:item.quantity,unit:item.unit,expiry_date:item.expiry_date||''})} style={{background:'#fff8f0',color:'#ff7043',border:'none',borderRadius:'50px',padding:'7px 16px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',cursor:'pointer'}}>✏️ Edit</button>
-                            <select value={item.location} onChange={(e) => changeLocation(item.id, e.target.value)} style={{border:'2px solid #eee',borderRadius:'50px',padding:'6px 12px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#555'}}>
-                              <option value="fridge">Fridge</option>
-                              <option value="freezer">Freezer</option>
-                              <option value="cupboard">Cupboard</option>
-                              <option value="other">Other</option>
-                            </select>
-                          </div>
-                        )}
-                        {item.category && <span style={{background:'#fff5f0',color:'#ff7043',fontSize:'11px',fontWeight:700,padding:'3px 10px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif"}}>{item.category}</span>}
+                          ) : (
+                            <>
+                              {editingItem?.id === group.batches[0].id ? editForm() : actionButtons(group.batches[0])}
+                              {group.category && <span style={{background:'#fff5f0',color:'#ff7043',fontSize:'11px',fontWeight:700,padding:'3px 10px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif"}}>{group.category}</span>}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+        ) : (
+          sorted.length === 0
+            ? <p style={{color:'#aaa',fontWeight:700,textAlign:'center',marginTop:'48px',fontFamily:"'Nunito',sans-serif"}}>No items found</p>
+            : <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+                {sorted.map((item) => {
+                  const d = daysLeft(item.expiry_date)
+                  const isExpanded = expandedId === item.id
+                  const isEditing = editingItem?.id === item.id
+                  return (
+                    <div key={item.id} className="item-row" style={{background:'white',borderRadius:'14px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',overflow:'hidden'}}>
+                      <div onClick={() => setExpandedId(isExpanded ? null : item.id)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 16px',cursor:'pointer'}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <h3 style={{fontFamily:"'Fredoka One',cursive",fontSize:'17px',color:'#2d2d2d',margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{item.name}</h3>
+                          <p style={{color:'#bbb',fontSize:'12px',fontWeight:700,margin:0,fontFamily:"'Nunito',sans-serif"}}>{item.quantity} {item.unit} · {item.location}</p>
+                        </div>
+                        <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
+                          <span style={{color:expiryColor(d),fontWeight:800,fontSize:'12px',fontFamily:"'Nunito',sans-serif"}}>{expiryLabel(d)}</span>
+                          <span style={{color:'#ccc',fontSize:'16px'}}>{isExpanded ? '▲' : '▼'}</span>
+                        </div>
                       </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-        }
+                      {isExpanded && (
+                        <div style={{borderTop:'1px solid #f5f5f5',padding:'12px 16px',background:'#fffaf7'}}>
+                          {isEditing ? editForm() : actionButtons(item)}
+                          {item.category && <span style={{background:'#fff5f0',color:'#ff7043',fontSize:'11px',fontWeight:700,padding:'3px 10px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif"}}>{item.category}</span>}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+        )}
+
         <div style={{display:'flex',justifyContent:'center',gap:'24px',marginTop:'32px'}}>
           <a href="/spend" style={{color:'#ff7043',fontWeight:700,fontSize:'14px',textDecoration:'none',fontFamily:"'Nunito',sans-serif"}}>💳 Spend History</a>
         </div>
