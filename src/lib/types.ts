@@ -54,4 +54,5 @@ location: StorageLocation
 category: string | null
 expiry_date: string | null
 selected: boolean
+confidence: number
 }
