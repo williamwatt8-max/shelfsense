@@ -1,6 +1,6 @@
 export type InventoryStatus = 'active' | 'used' | 'discarded' | 'expired'
 export type StorageLocation = 'fridge' | 'freezer' | 'cupboard' | 'other' | 'household'
-export type EventType = 'added' | 'used' | 'used_some' | 'moved' | 'discarded' | 'expired'
+export type EventType = 'added' | 'used' | 'used_some' | 'moved' | 'discarded' | 'expired' | 'opened'
 export type Receipt = {
 id: string
 user_id: string | null
@@ -34,6 +34,7 @@ location: StorageLocation
 category: string | null
 purchase_date: string
 expiry_date: string | null
+opened_at: string | null
 status: InventoryStatus
 created_at: string
 updated_at: string
