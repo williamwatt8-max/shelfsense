@@ -56,3 +56,15 @@ expiry_date: string | null
 selected: boolean
 confidence: number
 }
+export type ParsedReceiptItem = {
+raw_text: string
+normalized_name: string
+quantity: number
+unit: string
+category: string
+confidence: number
+}
+export type ParsedReceipt = {
+retailer_name: string
+items: ParsedReceiptItem[]
+}
