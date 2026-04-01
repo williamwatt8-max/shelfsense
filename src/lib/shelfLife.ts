@@ -201,7 +201,6 @@ const itemShelfLife: Record<string, ShelfLifeEntry> = {
 
   // ── Dairy alternatives & other fresh ─────────────────────────────────────
   'tofu':                  { min: 3,   max: 5   },
-  'hummus':                { min: 4,   max: 7   },
 }
 
 // Category fallbacks — matched when no specific item key matches
