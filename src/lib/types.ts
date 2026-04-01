@@ -47,9 +47,11 @@ created_at: string
 export type ReviewItem = {
 id: string
 name: string
+normalized_name: string
 quantity: number
 unit: string
 location: StorageLocation
 category: string | null
 expiry_date: string | null
+selected: boolean
 }
