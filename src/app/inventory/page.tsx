@@ -16,6 +16,7 @@ type GroupedItem = {
   location: string
   category: string | null
   nearestExpiry: string | null
+  retailer: string | null
   batches: InventoryItemWithPrice[]
 }
 
@@ -46,6 +47,7 @@ export default function InventoryPage() {
   const [openingItem, setOpeningItem]   = useState<OpeningItemState | null>(null)
   const [selectMode, setSelectMode]     = useState<boolean>(false)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
+  const [retailerFilter, setRetailerFilter] = useState<string | null>(null)
   const [toast, setToast]               = useState<string | null>(null)
   const [voiceListening, setVoiceListening]     = useState(false)
   const [voiceProcessing, setVoiceProcessing]   = useState(false)
@@ -217,6 +219,30 @@ export default function InventoryPage() {
     loadItems()
   }
 
+  async function markBulkUsed() {
+    if (selectedIds.size === 0) return
+    const ids = Array.from(selectedIds)
+    await supabase.from('inventory_items').update({ status: 'used' }).in('id', ids)
+    await supabase.from('inventory_events').insert(ids.map(id => ({ inventory_item_id: id, type: 'used' })))
+    setSelectedIds(new Set())
+    setSelectMode(false)
+    setToast(`✅ ${ids.length} item${ids.length > 1 ? 's' : ''} marked as used`)
+    setTimeout(() => setToast(null), 2500)
+    loadItems()
+  }
+
+  async function markBulkDiscarded() {
+    if (selectedIds.size === 0) return
+    const ids = Array.from(selectedIds)
+    await supabase.from('inventory_items').update({ status: 'discarded' }).in('id', ids)
+    await supabase.from('inventory_events').insert(ids.map(id => ({ inventory_item_id: id, type: 'discarded' })))
+    setSelectedIds(new Set())
+    setSelectMode(false)
+    setToast(`🗑️ ${ids.length} item${ids.length > 1 ? 's' : ''} discarded`)
+    setTimeout(() => setToast(null), 2500)
+    loadItems()
+  }
+
   function startVoiceListening() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SR) {
@@ -365,7 +391,10 @@ export default function InventoryPage() {
 
   // ── Filtering & sorting ────────────────────────────────────────��──────────
 
+  const retailers = Array.from(new Set(items.map(i => i.retailer).filter(Boolean))) as string[]
+
   const filtered = items.filter((item) => {
+    if (retailerFilter && item.retailer !== retailerFilter) return false
     const d = daysLeft(item.expiry_date)
     const isExpired = d !== null && d < 0
     if (filter === 'expired')  return isExpired
@@ -401,7 +430,7 @@ export default function InventoryPage() {
         if (item.expiry_date && (!g.nearestExpiry || item.expiry_date < g.nearestExpiry))
           g.nearestExpiry = item.expiry_date
       } else {
-        map.set(key, { name: item.name, totalQuantity: item.quantity, unit: item.unit, location: item.location, category: item.category, nearestExpiry: item.expiry_date, batches: [item] })
+        map.set(key, { name: item.name, totalQuantity: item.quantity, unit: item.unit, location: item.location, category: item.category, nearestExpiry: item.expiry_date, retailer: item.retailer, batches: [item] })
       }
     }
     return Array.from(map.values()).sort((a, b) => {
@@ -554,10 +583,10 @@ export default function InventoryPage() {
   type HeaderProps = {
     name: string; location: string; quantity: number; unit: string
     createdAt: string; openedAt: string | null; price: number | null
-    hasBatches?: boolean
+    retailer?: string | null; hasBatches?: boolean
   }
 
-  const ItemHeaderLeft = ({ name, location, quantity, unit, createdAt, openedAt, price, hasBatches }: HeaderProps) => (
+  const ItemHeaderLeft = ({ name, location, quantity, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
         <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -568,6 +597,9 @@ export default function InventoryPage() {
         )}
         {openedAt && (
           <span style={{ background: 'rgba(32,178,170,0.12)', color: '#20b2aa', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🔓 {formatOpenedDate(openedAt)}</span>
+        )}
+        {retailer && (
+          <span style={{ background: 'rgba(255,112,67,0.1)', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>{retailer}</span>
         )}
         {hasBatches && (
           <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>batches</span>
@@ -693,7 +725,7 @@ export default function InventoryPage() {
         )}
 
         {/* ── Filter pills ── */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
           {filters.map((f) => {
             const active = filter === f
             const isExpiredTab = f === 'expired'
@@ -713,6 +745,23 @@ export default function InventoryPage() {
             )
           })}
         </div>
+
+        {/* ── Retailer filter pills ── */}
+        {retailers.length > 0 && (
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc' }}>🏪</span>
+            {retailerFilter && (
+              <button onClick={() => setRetailerFilter(null)} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: '#f5f5f5', color: '#aaa' }}>
+                All stores
+              </button>
+            )}
+            {retailers.map(r => (
+              <button key={r} onClick={() => setRetailerFilter(retailerFilter === r ? null : r)} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: retailerFilter === r ? 'rgba(255,112,67,0.15)' : 'white', color: retailerFilter === r ? '#ff7043' : '#888', boxShadow: '0 2px 6px rgba(0,0,0,0.07)' }}>
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* ── Voice feedback card ── */}
         {(voiceListening || voiceProcessing || voiceAction || voiceError) && (
@@ -801,7 +850,7 @@ export default function InventoryPage() {
                     <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
-                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} hasBatches={hasBatches} />
+                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
@@ -858,7 +907,7 @@ export default function InventoryPage() {
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
-                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} />
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
@@ -881,8 +930,37 @@ export default function InventoryPage() {
 
       {/* ── Toast ── */}
       {toast && (
-        <div style={{ position: 'fixed', bottom: selectMode ? '80px' : '24px', left: '50%', transform: 'translateX(-50%)', background: '#2d2d2d', color: 'white', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', padding: '12px 22px', borderRadius: '50px', boxShadow: '0 6px 24px rgba(0,0,0,0.2)', zIndex: 2000, whiteSpace: 'nowrap' }}>
+        <div style={{ position: 'fixed', bottom: selectMode ? '96px' : '24px', left: '50%', transform: 'translateX(-50%)', background: '#2d2d2d', color: 'white', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', padding: '12px 22px', borderRadius: '50px', boxShadow: '0 6px 24px rgba(0,0,0,0.2)', zIndex: 2000, whiteSpace: 'nowrap' }}>
           {toast}
+        </div>
+      )}
+
+      {/* ── Bulk action bar ── */}
+      {selectMode && (
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white', borderTop: '1px solid #f0f0f0', boxShadow: '0 -4px 20px rgba(0,0,0,0.1)', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '10px', zIndex: 1000 }}>
+          <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: selectedIds.size > 0 ? '#ff7043' : '#ccc', flex: 1 }}>
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'Select items'}
+          </span>
+          <button
+            onClick={markBulkUsed}
+            disabled={selectedIds.size === 0}
+            style={{ ...btnBase, background: selectedIds.size > 0 ? 'linear-gradient(135deg,#4caf50,#66bb6a)' : '#f5f5f5', color: selectedIds.size > 0 ? 'white' : '#ccc', boxShadow: selectedIds.size > 0 ? '0 4px 12px rgba(76,175,80,0.3)' : 'none', padding: '10px 16px' }}
+          >
+            ✅ Mark Used
+          </button>
+          <button
+            onClick={markBulkDiscarded}
+            disabled={selectedIds.size === 0}
+            style={{ ...btnBase, background: selectedIds.size > 0 ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : '#f5f5f5', color: selectedIds.size > 0 ? 'white' : '#ccc', boxShadow: selectedIds.size > 0 ? '0 4px 12px rgba(255,68,68,0.3)' : 'none', padding: '10px 16px' }}
+          >
+            🗑️ Discard
+          </button>
+          <button
+            onClick={() => { setSelectMode(false); setSelectedIds(new Set()) }}
+            style={{ ...btnBase, background: '#f5f5f5', color: '#888', padding: '10px 16px' }}
+          >
+            Cancel
+          </button>
         </div>
       )}
     </main>

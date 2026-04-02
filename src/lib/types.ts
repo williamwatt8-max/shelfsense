@@ -35,6 +35,8 @@ category: string | null
 purchase_date: string
 expiry_date: string | null
 opened_at: string | null
+opened_expiry_days: number | null
+retailer: string | null
 status: InventoryStatus
 created_at: string
 updated_at: string
