@@ -31,9 +31,13 @@ export default function InsightsPage() {
 
   useEffect(() => {
     async function load() {
+      const { data: { session } } = await supabase.auth.getSession()
+      const userId = session?.user?.id
+      if (!userId) { setLoading(false); return }
       const { data, error } = await supabase
         .from('inventory_items')
         .select('id, name, category, status, quantity, unit, purchase_date, receipt_item_id, receipt_items(price)')
+        .eq('user_id', userId)
         .in('status', ['used', 'discarded', 'expired'])
         .order('purchase_date', { ascending: false })
       if (error) { alert('Error: ' + error.message); setLoading(false); return }

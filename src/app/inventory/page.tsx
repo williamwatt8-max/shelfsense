@@ -55,9 +55,13 @@ export default function InventoryPage() {
   // ── Data ──────────────────────────────────────────────────────────────────
 
   async function loadItems() {
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user?.id
+    if (!userId) return
     const { data, error } = await supabase
       .from('inventory_items')
       .select('*, receipt_items!receipt_item_id(price)')
+      .eq('user_id', userId)
       .eq('status', 'active')
       .order('created_at', { ascending: false })
     if (error) {

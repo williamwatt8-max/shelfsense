@@ -101,9 +101,11 @@ export default function Home() {
 
   async function handleSave() {
     const selected = items.filter((i) => i.selected)
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user?.id ?? null
     const { data: receiptData, error: receiptError } = await supabase
       .from('receipts')
-      .insert({ retailer_name: retailer, total: total })
+      .insert({ retailer_name: retailer, total: total, user_id: userId })
       .select()
       .single()
     if (receiptError) { alert('Error saving receipt: ' + receiptError.message); return }
@@ -132,6 +134,7 @@ export default function Home() {
         expiry_date: item.expiry_date || null,
         receipt_item_id: receiptItems?.[i]?.id || null,
         status: 'active',
+        user_id: userId,
       }))
     )
     if (inventoryError) { alert('Error saving to inventory: ' + inventoryError.message) } else { setStep('done') }

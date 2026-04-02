@@ -26,9 +26,13 @@ export default function SpendPage() {
 
   useEffect(() => {
     async function load() {
+      const { data: { session } } = await supabase.auth.getSession()
+      const userId = session?.user?.id
+      if (!userId) { setLoading(false); return }
       const { data, error } = await supabase
         .from('receipts')
         .select('id, retailer_name, total, created_at, receipt_items(normalized_name, category, price)')
+        .eq('user_id', userId)
         .order('created_at', { ascending: false })
       if (error) { alert('Error: ' + error.message) } else { setReceipts(data || []) }
       setLoading(false)

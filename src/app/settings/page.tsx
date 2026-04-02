@@ -1,6 +1,28 @@
 'use client'
 
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import { signOut } from '@/lib/auth'
+
 export default function SettingsPage() {
+  const [email, setEmail] = useState<string | null>(null)
+  const [signingOut, setSigningOut] = useState(false)
+  const router = useRouter()
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setEmail(user?.email ?? null)
+    })
+  }, [])
+
+  async function handleSignOut() {
+    setSigningOut(true)
+    await signOut()
+    router.push('/auth')
+    router.refresh()
+  }
+
   const warmStyle = {
     fontFamily: "'Nunito', sans-serif",
     minHeight: '100vh',
@@ -20,6 +42,26 @@ export default function SettingsPage() {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
+          {/* Account */}
+          <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
+            <h2 style={{ fontFamily: "'Fredoka One', cursive", fontSize: '20px', color: '#2d2d2d', margin: '0 0 16px' }}>
+              👤 Account
+            </h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
+              <span style={{ fontWeight: 700, color: '#555', fontSize: '14px' }}>Email</span>
+              <span style={{ fontWeight: 600, color: '#aaa', fontSize: '14px' }}>{email ?? '...'}</span>
+            </div>
+            <div style={{ paddingTop: '16px' }}>
+              <button
+                onClick={handleSignOut}
+                disabled={signingOut}
+                style={{ width: '100%', background: signingOut ? '#f5f5f5' : 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: signingOut ? '#bbb' : 'white', fontFamily: "'Fredoka One', cursive", fontSize: '17px', padding: '13px', borderRadius: '50px', border: 'none', cursor: signingOut ? 'default' : 'pointer', boxShadow: signingOut ? 'none' : '0 6px 20px rgba(255,68,68,0.35)', transition: 'all 0.2s' }}
+              >
+                {signingOut ? 'Signing out...' : '🚪 Sign Out'}
+              </button>
+            </div>
+          </div>
+
           {/* About */}
           <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.06)' }}>
             <h2 style={{ fontFamily: "'Fredoka One', cursive", fontSize: '20px', color: '#2d2d2d', margin: '0 0 12px' }}>
@@ -36,8 +78,8 @@ export default function SettingsPage() {
               📱 App Info
             </h2>
             {[
-              { label: 'Version', value: '1.0.0' },
-              { label: 'Storage', value: 'Supabase Cloud' },
+              { label: 'Version',   value: '1.0.0' },
+              { label: 'Storage',   value: 'Supabase Cloud' },
               { label: 'AI Engine', value: 'Claude (Anthropic)' },
             ].map(({ label, value }) => (
               <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #f5f5f5' }}>
