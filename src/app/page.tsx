@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react'
 import { ReviewItem, StorageLocation } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { suggestLocation } from '@/lib/categoriser'
 
 export default function Home() {
   const [step, setStep] = useState<'upload' | 'reviewing' | 'done'>('upload')
@@ -27,7 +28,9 @@ export default function Home() {
       setRetailer(result.retailer_name || 'Unknown Store')
       setTotal(result.total || null)
       setItems(result.items.map((item: any, i: number) => ({
-        ...item, id: String(i), selected: true, location: 'fridge' as StorageLocation, expiry_date: null,
+        ...item, id: String(i), selected: true,
+        location: suggestLocation(item.normalized_name, item.category) as StorageLocation,
+        expiry_date: null,
       })))
       setStep('reviewing')
     } catch (err) {
@@ -154,7 +157,9 @@ export default function Home() {
                     <option value="household">Household</option>
                     <option value="other">Other</option>
                   </select>
-                  <input type="date" value={item.expiry_date || ''} onChange={(e) => { const updated = [...items]; updated[index].expiry_date = e.target.value || null; setItems(updated) }} style={{border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
+                  {item.location !== 'household' && (
+                    <input type="date" value={item.expiry_date || ''} onChange={(e) => { const updated = [...items]; updated[index].expiry_date = e.target.value || null; setItems(updated) }} style={{border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
+                  )}
                 </div>
               </div>
             ))}

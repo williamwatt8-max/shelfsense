@@ -6,7 +6,8 @@ import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
 
-// ── Types ─────────────────────────────────────────────────────────────────
+// ── Extended type: InventoryItem + price from receipt_items join ──────────────
+type InventoryItemWithPrice = InventoryItem & { price: number | null }
 
 type GroupedItem = {
   name: string
@@ -15,53 +16,51 @@ type GroupedItem = {
   location: string
   category: string | null
   nearestExpiry: string | null
-  batches: InventoryItem[]
+  batches: InventoryItemWithPrice[]
 }
 
-type UsingItemState = {
-  id: string
-  used: number
-  unit: string
-  maxQty: number
-}
+type UsingItemState  = { id: string; used: number; unit: string; maxQty: number }
+type OpeningItemState = { id: string; name: string; category: string | null; suggestedExpiry: string; rangeText: string; hasShelfLife: boolean }
+type EditingItemState = { id: string; quantity: number; unit: string; expiry_date: string; location: string }
 
-type OpeningItemState = {
-  id: string
-  name: string
-  category: string | null
-  suggestedExpiry: string
-  rangeText: string
-  hasShelfLife: boolean
-}
-
-// ── Component ─────────────────────────────────────────────────────────────
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
-  const [items, setItems] = useState<InventoryItem[]>([])
-  const [filter, setFilter] = useState<string>('all')
-  const [sortBy, setSortBy] = useState<string>('date_added')
-  const [grouped, setGrouped] = useState<boolean>(true)
-  const [loading, setLoading] = useState(true)
+  const [items, setItems]           = useState<InventoryItemWithPrice[]>([])
+  const [filter, setFilter]         = useState<string>('all')
+  const [sortBy, setSortBy]         = useState<string>('date_added')
+  const [grouped, setGrouped]       = useState<boolean>(true)
+  const [loading, setLoading]       = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [editingItem, setEditingItem] = useState<{ id: string; quantity: number; unit: string; expiry_date: string } | null>(null)
-  const [usingItem, setUsingItem] = useState<UsingItemState | null>(null)
-  const [openingItem, setOpeningItem] = useState<OpeningItemState | null>(null)
+  const [editingItem, setEditingItem]   = useState<EditingItemState | null>(null)
+  const [usingItem, setUsingItem]       = useState<UsingItemState | null>(null)
+  const [openingItem, setOpeningItem]   = useState<OpeningItemState | null>(null)
 
-  // ── Data loading ──────────────────────────────────────────────────────
+  // ── Data ──────────────────────────────────────────────────────────────────
 
   async function loadItems() {
     const { data, error } = await supabase
       .from('inventory_items')
-      .select('*')
+      .select('*, receipt_items!receipt_item_id(price)')
       .eq('status', 'active')
       .order('created_at', { ascending: false })
-    if (error) { alert('Error: ' + error.message) } else { setItems(data || []) }
+    if (error) {
+      alert('Error loading inventory: ' + error.message)
+      setLoading(false)
+      return
+    }
+    const mapped: InventoryItemWithPrice[] = (data || []).map((d: any) => ({
+      ...d,
+      price: d.receipt_items?.price ?? null,
+      receipt_items: undefined,
+    }))
+    setItems(mapped)
     setLoading(false)
   }
 
   useEffect(() => { loadItems() }, [])
 
-  // ── Helpers ───────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   function daysLeft(date: string | null): number | null {
     if (!date) return null
@@ -87,11 +86,11 @@ export default function InventoryPage() {
 
   function formatDateAdded(dateStr: string): string {
     const d = differenceInDays(new Date(), new Date(dateStr))
-    if (d === 0) return 'Added today'
-    if (d === 1) return 'Added yesterday'
-    if (d < 7)  return `Added ${d}d ago`
-    if (d < 30) return `Added ${Math.floor(d / 7)}w ago`
-    return `Added ${Math.floor(d / 30)}mo ago`
+    if (d === 0) return 'today'
+    if (d === 1) return 'yesterday'
+    if (d < 7)  return `${d}d ago`
+    if (d < 30) return `${Math.floor(d / 7)}w ago`
+    return `${Math.floor(d / 30)}mo ago`
   }
 
   function formatOpenedDate(dateStr: string): string {
@@ -105,7 +104,7 @@ export default function InventoryPage() {
     return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
   }
 
-  // ── Actions ───────────────────────────────────────────────────────────
+  // ── Actions ───────────────────────────────────────────────────────────────
 
   async function markUsed(id: string) {
     await supabase.from('inventory_items').update({ status: 'used' }).eq('id', id)
@@ -153,7 +152,7 @@ export default function InventoryPage() {
     loadItems()
   }
 
-  function startOpening(item: InventoryItem) {
+  function startOpening(item: InventoryItemWithPrice) {
     setEditingItem(null)
     setUsingItem(null)
     const sl = lookupShelfLife(item.name, item.category)
@@ -161,9 +160,12 @@ export default function InventoryPage() {
       const avgDays = Math.round((sl.min + sl.max) / 2)
       const d = new Date()
       d.setDate(d.getDate() + avgDays)
-      const suggestedExpiry = d.toISOString().split('T')[0]
-      const rangeText = sl.min === sl.max ? `${sl.min} days` : `${sl.min}–${sl.max} days`
-      setOpeningItem({ id: item.id, name: item.name, category: item.category, suggestedExpiry, rangeText, hasShelfLife: true })
+      setOpeningItem({
+        id: item.id, name: item.name, category: item.category,
+        suggestedExpiry: d.toISOString().split('T')[0],
+        rangeText: sl.min === sl.max ? `${sl.min} days` : `${sl.min}–${sl.max} days`,
+        hasShelfLife: true,
+      })
     } else {
       setOpeningItem({ id: item.id, name: item.name, category: item.category, suggestedExpiry: '', rangeText: '', hasShelfLife: false })
     }
@@ -184,34 +186,34 @@ export default function InventoryPage() {
     loadItems()
   }
 
-  // ── Filters & sorting ─────────────────────────────────────────────────
+  // ── Filtering & sorting ────────────────────────────────────────��──────────
 
   const filtered = items.filter((item) => {
-    if (filter === 'all') return true
-    if (filter === 'expiring') {
-      const d = daysLeft(item.expiry_date)
-      return d !== null && d <= 7
-    }
+    const d = daysLeft(item.expiry_date)
+    const isExpired = d !== null && d < 0
+    if (filter === 'expired')  return isExpired
+    if (isExpired)             return false   // expired items only appear in the Expired tab
+    if (filter === 'expiring') return d !== null && d >= 0 && d <= 7
+    if (filter === 'all')      return true
     return item.location === filter
   })
 
-  function sortItems(arr: InventoryItem[]): InventoryItem[] {
+  function sortItems(arr: InventoryItemWithPrice[]): InventoryItemWithPrice[] {
     return [...arr].sort((a, b) => {
       if (sortBy === 'expiry') {
         const da = daysLeft(a.expiry_date), db = daysLeft(b.expiry_date)
         if (da === null && db === null) return 0
-        if (da === null) return 1
-        if (db === null) return -1
+        if (da === null) return 1; if (db === null) return -1
         return da - db
       }
-      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'name')     return a.name.localeCompare(b.name)
       if (sortBy === 'location') return a.location.localeCompare(b.location)
       if (sortBy === 'category') return (a.category || '').localeCompare(b.category || '')
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     })
   }
 
-  function groupItems(arr: InventoryItem[]): GroupedItem[] {
+  function groupItems(arr: InventoryItemWithPrice[]): GroupedItem[] {
     const map = new Map<string, GroupedItem>()
     for (const item of arr) {
       const key = item.name.toLowerCase().trim()
@@ -219,9 +221,8 @@ export default function InventoryPage() {
         const g = map.get(key)!
         g.totalQuantity += item.quantity
         g.batches.push(item)
-        if (item.expiry_date && (!g.nearestExpiry || item.expiry_date < g.nearestExpiry)) {
+        if (item.expiry_date && (!g.nearestExpiry || item.expiry_date < g.nearestExpiry))
           g.nearestExpiry = item.expiry_date
-        }
       } else {
         map.set(key, { name: item.name, totalQuantity: item.quantity, unit: item.unit, location: item.location, category: item.category, nearestExpiry: item.expiry_date, batches: [item] })
       }
@@ -230,28 +231,28 @@ export default function InventoryPage() {
       if (sortBy === 'expiry') {
         const da = daysLeft(a.nearestExpiry), db = daysLeft(b.nearestExpiry)
         if (da === null && db === null) return 0
-        if (da === null) return 1
-        if (db === null) return -1
+        if (da === null) return 1; if (db === null) return -1
         return da - db
       }
-      if (sortBy === 'name') return a.name.localeCompare(b.name)
+      if (sortBy === 'name')     return a.name.localeCompare(b.name)
       if (sortBy === 'location') return a.location.localeCompare(b.location)
       if (sortBy === 'category') return (a.category || '').localeCompare(b.category || '')
       return 0
     })
   }
 
-  const sorted = sortItems(filtered)
+  const sorted       = sortItems(filtered)
   const groupedItems = groupItems(filtered)
 
-  // ── Derived counts ────────────────────────────────────────────────────
+  // ── Derived counts & stock value ──────────────────────────────────────────
 
-  const expiringCount = items.filter((item) => {
-    const d = daysLeft(item.expiry_date)
-    return d !== null && d >= 0 && d <= 7
-  }).length
+  const expiringCount = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d >= 0 && d <= 7 }).length
+  const expiredCount  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d < 0 }).length
+  const activeItems   = items.filter(i => { const d = daysLeft(i.expiry_date); return d === null || d >= 0 })
+  const stockValue    = activeItems.reduce((sum, i) => sum + (i.price ?? 0), 0)
+  const pricedCount   = activeItems.filter(i => i.price !== null).length
 
-  // ── Styles ────────────────────────────────────────────────────────────
+  // ── Static config ─────────────────────────────────────────────────────────
 
   const warmStyle = {
     fontFamily: "'Nunito', sans-serif",
@@ -259,25 +260,20 @@ export default function InventoryPage() {
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
     padding: '72px 24px 32px',
   }
-
-  const filters = ['all', 'fridge', 'freezer', 'cupboard', 'household', 'expiring']
-  const units = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
-
+  const filters = ['all', 'fridge', 'freezer', 'cupboard', 'household', 'expiring', 'expired']
+  const units   = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
   const btnBase: React.CSSProperties = { border: 'none', borderRadius: '50px', padding: '7px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', cursor: 'pointer' }
 
-  // ── Sub-panels ────────────────────────────────────────────────────────
+  // ── Sub-panels ────────────────────────────────────────────────────────────
 
-  const partialUsePanel = (item: InventoryItem) => (
+  const partialUsePanel = (item: InventoryItemWithPrice) => (
     <div style={{ background: '#f4fff6', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
       <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 12px' }}>
         How much of <span style={{ color: '#4caf50' }}>{item.name}</span> did you use?
       </p>
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
         <input
-          type="number"
-          min={0.1}
-          max={usingItem!.maxQty}
-          step={0.1}
+          type="number" min={0.1} max={usingItem!.maxQty} step={0.1}
           value={usingItem!.used}
           onChange={e => setUsingItem({ ...usingItem!, used: parseFloat(e.target.value) || 0 })}
           style={{ width: '80px', border: '2px solid #c8e6c9', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', textAlign: 'center' }}
@@ -285,18 +281,14 @@ export default function InventoryPage() {
         <span style={{ fontWeight: 700, color: '#555', fontSize: '14px' }}>{usingItem!.unit}</span>
         <span style={{ color: '#aaa', fontSize: '12px', fontWeight: 700 }}>of {usingItem!.maxQty} {usingItem!.unit} remaining</span>
       </div>
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        <button onClick={markUsedSome} style={{ ...btnBase, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', boxShadow: '0 4px 12px rgba(76,175,80,0.3)' }}>
-          ✅ Confirm
-        </button>
-        <button onClick={() => setUsingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>
-          Cancel
-        </button>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button onClick={markUsedSome} style={{ ...btnBase, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', boxShadow: '0 4px 12px rgba(76,175,80,0.3)' }}>✅ Confirm</button>
+        <button onClick={() => setUsingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
       </div>
     </div>
   )
 
-  const openingPanel = (item: InventoryItem) => (
+  const openingPanel = (item: InventoryItemWithPrice) => (
     <div style={{ background: '#fff8f0', border: '1.5px solid rgba(255,112,67,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
       <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>
         📦 Marking <span style={{ color: '#ff7043' }}>{item.name}</span> as opened today
@@ -310,15 +302,9 @@ export default function InventoryPage() {
             Suggested new expiry: <strong style={{ color: '#2d2d2d' }}>{formatDisplayDate(openingItem!.suggestedExpiry)}</strong>
           </p>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button onClick={() => confirmOpened(true)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>
-              ✅ Update expiry
-            </button>
-            <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)' }}>
-              📅 Just record opened
-            </button>
-            <button onClick={() => setOpeningItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>
-              Cancel
-            </button>
+            <button onClick={() => confirmOpened(true)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>✅ Update expiry</button>
+            <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)' }}>📅 Just record opened</button>
+            <button onClick={() => setOpeningItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
           </div>
         </>
       ) : (
@@ -327,64 +313,27 @@ export default function InventoryPage() {
             No shelf life data for this item — we'll just record the opened date.
           </p>
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>
-              ✅ Record opened
-            </button>
-            <button onClick={() => setOpeningItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>
-              Cancel
-            </button>
+            <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>✅ Record opened</button>
+            <button onClick={() => setOpeningItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
           </div>
         </>
       )}
     </div>
   )
 
-  // ── Action area ───────────────────────────────────────────────────────
-  // Returns the right panel: partial-use, opening, or normal buttons.
-
-  const actionArea = (item: InventoryItem) => {
-    if (usingItem?.id === item.id) return partialUsePanel(item)
+  const actionArea = (item: InventoryItemWithPrice) => {
+    if (usingItem?.id === item.id)  return partialUsePanel(item)
     if (openingItem?.id === item.id) return openingPanel(item)
-
     return (
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-        <button
-          onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.quantity }); setOpeningItem(null); setEditingItem(null) }}
-          style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}
-        >
-          🍽️ Use some
-        </button>
-        <button
-          onClick={() => markUsed(item.id)}
-          style={{ ...btnBase, background: '#e8f5e9', color: '#388e3c' }}
-        >
-          ✅ Used all
-        </button>
+        <button onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.quantity }); setOpeningItem(null); setEditingItem(null) }} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ Use some</button>
+        <button onClick={() => markUsed(item.id)} style={{ ...btnBase, background: '#e8f5e9', color: '#388e3c' }}>✅ Used all</button>
         {!item.opened_at && (
-          <button
-            onClick={() => { startOpening(item); setEditingItem(null) }}
-            style={{ ...btnBase, background: '#fff3e0', color: '#e65100' }}
-          >
-            📦 Mark opened
-          </button>
+          <button onClick={() => { startOpening(item); setEditingItem(null) }} style={{ ...btnBase, background: '#fff3e0', color: '#e65100' }}>📦 Mark opened</button>
         )}
-        <button
-          onClick={() => markDiscarded(item.id)}
-          style={{ ...btnBase, background: '#fff0f0', color: '#ff4444' }}
-        >
-          🗑️ Discard
-        </button>
-        <button
-          onClick={() => { setEditingItem({ id: item.id, quantity: item.quantity, unit: item.unit, expiry_date: item.expiry_date || '' }); setUsingItem(null); setOpeningItem(null) }}
-          style={{ ...btnBase, background: '#fff8f0', color: '#ff7043' }}
-        >
-          ✏️ Edit
-        </button>
-        <select
-          value={item.location}
-          onChange={(e) => changeLocation(item.id, e.target.value)}
-          style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}
-        >
+        <button onClick={() => markDiscarded(item.id)} style={{ ...btnBase, background: '#fff0f0', color: '#ff4444' }}>🗑️ Discard</button>
+        <button onClick={() => { setEditingItem({ id: item.id, quantity: item.quantity, unit: item.unit, expiry_date: item.expiry_date || '', location: item.location }); setUsingItem(null); setOpeningItem(null) }} style={{ ...btnBase, background: '#fff8f0', color: '#ff7043' }}>✏️ Edit</button>
+        <select value={item.location} onChange={(e) => changeLocation(item.id, e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>
           <option value="fridge">Fridge</option>
           <option value="freezer">Freezer</option>
           <option value="cupboard">Cupboard</option>
@@ -395,8 +344,6 @@ export default function InventoryPage() {
     )
   }
 
-  // ── Edit form ─────────────────────────────────────────────────────────
-
   const editForm = () => editingItem && (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '12px', padding: '12px', background: 'white', borderRadius: '10px' }}>
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -406,10 +353,12 @@ export default function InventoryPage() {
           {units.map(u => <option key={u} value={u}>{u}</option>)}
         </select>
       </div>
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-        <label style={{ color: '#aaa', fontSize: '12px', fontWeight: 700, fontFamily: "'Nunito',sans-serif", width: '60px' }}>Expiry</label>
-        <input type="date" value={editingItem.expiry_date || ''} onChange={e => setEditingItem({ ...editingItem, expiry_date: e.target.value })} style={{ border: '2px solid #eee', borderRadius: '8px', padding: '6px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }} />
-      </div>
+      {editingItem.location !== 'household' && (
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <label style={{ color: '#aaa', fontSize: '12px', fontWeight: 700, fontFamily: "'Nunito',sans-serif", width: '60px' }}>Expiry</label>
+          <input type="date" value={editingItem.expiry_date || ''} onChange={e => setEditingItem({ ...editingItem, expiry_date: e.target.value })} style={{ border: '2px solid #eee', borderRadius: '8px', padding: '6px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }} />
+        </div>
+      )}
       <div style={{ display: 'flex', gap: '8px' }}>
         <button onClick={saveEdit} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>Save</button>
         <button onClick={() => setEditingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
@@ -417,43 +366,58 @@ export default function InventoryPage() {
     </div>
   )
 
-  // ── Item header row ───────────────────────────────────────────────────
+  // ── Item header helpers ───────────────────────────────────────��───────────
 
-  const itemHeaderLeft = (name: string, location: string, quantity: number, unit: string, createdAt: string, openedAt: string | null, hasBatches?: boolean) => (
+  type HeaderProps = {
+    name: string; location: string; quantity: number; unit: string
+    createdAt: string; openedAt: string | null; price: number | null
+    hasBatches?: boolean
+  }
+
+  const ItemHeaderLeft = ({ name, location, quantity, unit, createdAt, openedAt, price, hasBatches }: HeaderProps) => (
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
         <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {name}
         </h3>
         {location === 'household' && (
-          <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>
-            🏠 household
-          </span>
+          <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🏠 household</span>
         )}
         {openedAt && (
-          <span style={{ background: 'rgba(32,178,170,0.12)', color: '#20b2aa', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>
-            🔓 {formatOpenedDate(openedAt)}
-          </span>
+          <span style={{ background: 'rgba(32,178,170,0.12)', color: '#20b2aa', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🔓 {formatOpenedDate(openedAt)}</span>
         )}
         {hasBatches && (
-          <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>
-            batches
-          </span>
+          <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>batches</span>
         )}
       </div>
-      <p style={{ color: '#bbb', fontSize: '12px', fontWeight: 700, margin: '2px 0 0', fontFamily: "'Nunito',sans-serif" }}>
-        {quantity} {unit} · {location} · <span style={{ color: '#ddd', fontWeight: 600 }}>{formatDateAdded(createdAt)}</span>
+      <p style={{ color: '#ccc', fontSize: '11px', fontWeight: 600, margin: '3px 0 0', fontFamily: "'Nunito',sans-serif", display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
+        <span style={{ color: '#bbb', fontWeight: 700 }}>{quantity} {unit} · {location}</span>
+        <span>· added {formatDateAdded(createdAt)}</span>
+        {price != null && <span style={{ color: '#d4a96e' }}>· £{price.toFixed(2)}</span>}
       </p>
     </div>
   )
 
-  // ── Render helpers ────────────────────────────────────────────────────
+  const cardBg     = (loc: string) => loc === 'household' ? '#f0f4ff' : 'white'
+  const cardBorder = (loc: string) => loc === 'household' ? '1.5px solid rgba(100,120,240,0.15)' : 'none'
+  const expandedBg = (loc: string) => loc === 'household' ? '#eef1ff' : '#fffaf7'
 
-  const expandedBg = (location: string) => location === 'household' ? '#eef1ff' : '#fffaf7'
-  const cardBg = (location: string) => location === 'household' ? '#f0f4ff' : 'white'
-  const cardBorder = (location: string) => location === 'household' ? '1.5px solid rgba(100,120,240,0.15)' : 'none'
+  // ── Expiry right-side display ─────────────────────────────────────────────
 
-  // ── Loading state ─────────────────────────────────────────────────────
+  const ExpiryBadge = ({ d, location }: { d: number | null; location: string }) => {
+    if (location === 'household') return null
+    const isExpired = d !== null && d < 0
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        {isExpired && <span style={{ fontSize: '15px' }} title="Expired">⚠️</span>}
+        <span style={{ color: expiryColor(d), fontWeight: 800, fontSize: '12px', fontFamily: "'Nunito',sans-serif" }}>
+          {expiryLabel(d)}
+        </span>
+      </div>
+    )
+  }
+
+  // ── Loading ───────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -464,7 +428,7 @@ export default function InventoryPage() {
     )
   }
 
-  // ── Main render ───────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <main style={warmStyle}>
@@ -473,11 +437,10 @@ export default function InventoryPage() {
         .item-row { transition: all 0.15s ease; }
         .item-row:active { transform: scale(0.99); }
       `}</style>
-
       <div style={{ maxWidth: '640px', margin: '0 auto' }}>
 
-        {/* ── Header ──────────────────────────────────────────────── */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        {/* ── Header ── */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div>
             <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '36px', color: '#2d2d2d', margin: 0 }}>Your Inventory</h1>
             <p style={{ color: '#aaa', fontWeight: 700, fontSize: '13px', margin: 0 }}>{items.length} items tracked</p>
@@ -487,45 +450,65 @@ export default function InventoryPage() {
           </a>
         </div>
 
-        {/* ── Expiring banner ──────────────────────────────────────── */}
-        {expiringCount > 0 && (
-          <button
-            onClick={() => setFilter('expiring')}
-            style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', background: 'linear-gradient(135deg,#fff8f0,#fff3e6)', border: '2px solid rgba(255,112,67,0.25)', borderRadius: '14px', padding: '12px 16px', marginBottom: '16px', cursor: 'pointer', textAlign: 'left', boxShadow: '0 2px 10px rgba(255,112,67,0.12)' }}
-          >
-            <span style={{ fontSize: '24px' }}>⏰</span>
-            <div style={{ flex: 1 }}>
-              <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff7043' }}>
-                {expiringCount} item{expiringCount > 1 ? 's' : ''} expiring within 7 days
-              </span>
-              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ffb347', margin: 0 }}>
-                Tap to view expiring items
+        {/* ── Stock value card ── */}
+        {pricedCount > 0 && (
+          <div style={{ background: 'white', borderRadius: '16px', padding: '16px 20px', marginBottom: '16px', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                💰 Current Stock Value
+              </p>
+              <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '28px', color: '#2d2d2d', margin: 0, lineHeight: 1 }}>
+                £{stockValue.toFixed(2)}
               </p>
             </div>
-            <span style={{ background: '#ff7043', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '16px', borderRadius: '50px', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              {expiringCount}
-            </span>
+            <div style={{ textAlign: 'right' }}>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', margin: 0 }}>
+                {pricedCount} priced item{pricedCount !== 1 ? 's' : ''}
+              </p>
+              {items.length - pricedCount > 0 && (
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#ddd', margin: '2px 0 0' }}>
+                  + {items.length - pricedCount} unpriced
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Expiring banner ── */}
+        {expiringCount > 0 && (
+          <button onClick={() => setFilter('expiring')} style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', background: 'linear-gradient(135deg,#fff8f0,#fff3e6)', border: '2px solid rgba(255,112,67,0.25)', borderRadius: '14px', padding: '12px 16px', marginBottom: '12px', cursor: 'pointer', textAlign: 'left', boxShadow: '0 2px 10px rgba(255,112,67,0.12)' }}>
+            <span style={{ fontSize: '24px' }}>⏰</span>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff7043' }}>{expiringCount} item{expiringCount > 1 ? 's' : ''} expiring within 7 days</span>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ffb347', margin: 0 }}>Tap to view expiring items</p>
+            </div>
+            <span style={{ background: '#ff7043', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '16px', borderRadius: '50px', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{expiringCount}</span>
           </button>
         )}
 
-        {/* ── Filter pills ─────────────────────────────────────────── */}
+        {/* ── Filter pills ── */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
           {filters.map((f) => {
+            const active = filter === f
+            const isExpiredTab = f === 'expired'
             const label =
               f === 'all'       ? 'All' :
               f === 'expiring'  ? `⏰ Expiring${expiringCount > 0 ? ` (${expiringCount})` : ''}` :
+              f === 'expired'   ? `⚠️ Expired${expiredCount > 0 ? ` (${expiredCount})` : ''}` :
               f === 'household' ? '🏠 Household' :
               f.charAt(0).toUpperCase() + f.slice(1)
-            const active = filter === f
+            const activeBg = isExpiredTab
+              ? 'linear-gradient(135deg,#ff4444,#ff6b6b)'
+              : 'linear-gradient(135deg,#ff7043,#ff9a3c)'
             return (
-              <button key={f} onClick={() => setFilter(f)} style={{ padding: '7px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: active ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: active ? 'white' : '#888', boxShadow: active ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)' }}>
+              <button key={f} onClick={() => setFilter(f)} style={{ padding: '7px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: active ? activeBg : 'white', color: active ? 'white' : '#888', boxShadow: active ? (isExpiredTab ? '0 4px 12px rgba(255,68,68,0.4)' : '0 4px 12px rgba(255,112,67,0.4)') : '0 2px 8px rgba(0,0,0,0.08)' }}>
                 {label}
               </button>
             )
           })}
         </div>
 
-        {/* ── Sort & group controls ─────────────────────────────────── */}
+        {/* ── Sort & group ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
             <option value="date_added">Date Added</option>
@@ -534,15 +517,12 @@ export default function InventoryPage() {
             <option value="location">Location</option>
             <option value="category">Category</option>
           </select>
-          <button
-            onClick={() => { setGrouped(!grouped); setExpandedId(null) }}
-            style={{ padding: '6px 16px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: grouped ? 'white' : '#888', boxShadow: grouped ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.2s' }}
-          >
+          <button onClick={() => { setGrouped(!grouped); setExpandedId(null) }} style={{ padding: '6px 16px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: grouped ? 'white' : '#888', boxShadow: grouped ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.2s' }}>
             {grouped ? '⊞ Grouped' : '☰ Ungrouped'}
           </button>
         </div>
 
-        {/* ── Item list ────────────────────────────────────────────── */}
+        {/* ── Item list ── */}
         {grouped ? (
           groupedItems.length === 0
             ? <p style={{ color: '#aaa', fontWeight: 700, textAlign: 'center', marginTop: '48px', fontFamily: "'Nunito',sans-serif" }}>No items found</p>
@@ -552,18 +532,17 @@ export default function InventoryPage() {
                   const d = daysLeft(group.nearestExpiry)
                   const isExpanded = expandedId === group.name
                   const hasBatches = group.batches.length > 1
-                  // Use the first batch's opened_at as representative for single-item groups
-                  const openedAt = !hasBatches ? group.batches[0].opened_at : null
+                  const repBatch = group.batches[0]
+                  const openedAt = !hasBatches ? repBatch.opened_at : null
                   return (
                     <div key={group.name} className="item-row" style={{ background: cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: cardBorder(group.location) }}>
-                      <div onClick={() => setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer' }}>
-                        {itemHeaderLeft(group.name, group.location, group.totalQuantity, group.unit, group.batches[0].created_at, openedAt, hasBatches)}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                          <span style={{ color: expiryColor(d), fontWeight: 800, fontSize: '12px', fontFamily: "'Nunito',sans-serif" }}>{expiryLabel(d)}</span>
+                      <div onClick={() => setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
+                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} hasBatches={hasBatches} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <ExpiryBadge d={d} location={group.location} />
                           <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>
                         </div>
                       </div>
-
                       {isExpanded && (
                         <div style={{ borderTop: '1px solid #f0f0f0', padding: '12px 16px', background: expandedBg(group.location) }}>
                           {hasBatches ? (
@@ -576,11 +555,12 @@ export default function InventoryPage() {
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                                       <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>
                                         Batch {bi + 1} — {batch.quantity} {batch.unit}
+                                        {batch.price != null && <span style={{ color: '#d4a96e', marginLeft: '6px' }}>£{batch.price.toFixed(2)}</span>}
                                       </span>
-                                      <span style={{ color: expiryColor(bd), fontWeight: 800, fontSize: '12px', fontFamily: "'Nunito',sans-serif" }}>{expiryLabel(bd)}</span>
+                                      <ExpiryBadge d={bd} location={batch.location} />
                                     </div>
                                     <p style={{ color: '#ddd', fontSize: '11px', fontWeight: 600, margin: '0 0 8px', fontFamily: "'Nunito',sans-serif" }}>
-                                      {formatDateAdded(batch.created_at)}
+                                      Added {formatDateAdded(batch.created_at)}
                                       {batch.opened_at && <span style={{ color: '#20b2aa', marginLeft: '8px' }}>🔓 {formatOpenedDate(batch.opened_at)}</span>}
                                     </p>
                                     {isEditingBatch ? editForm() : actionArea(batch)}
@@ -590,12 +570,8 @@ export default function InventoryPage() {
                             </div>
                           ) : (
                             <>
-                              {editingItem?.id === group.batches[0].id ? editForm() : actionArea(group.batches[0])}
-                              {group.category && (
-                                <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif" }}>
-                                  {group.category}
-                                </span>
-                              )}
+                              {editingItem?.id === repBatch.id ? editForm() : actionArea(repBatch)}
+                              {group.category && <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif" }}>{group.category}</span>}
                             </>
                           )}
                         </div>
@@ -616,21 +592,17 @@ export default function InventoryPage() {
                   const isEditing = editingItem?.id === item.id
                   return (
                     <div key={item.id} className="item-row" style={{ background: cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: cardBorder(item.location) }}>
-                      <div onClick={() => setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer' }}>
-                        {itemHeaderLeft(item.name, item.location, item.quantity, item.unit, item.created_at, item.opened_at)}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                          <span style={{ color: expiryColor(d), fontWeight: 800, fontSize: '12px', fontFamily: "'Nunito',sans-serif" }}>{expiryLabel(d)}</span>
+                      <div onClick={() => setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <ExpiryBadge d={d} location={item.location} />
                           <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>
                         </div>
                       </div>
                       {isExpanded && (
                         <div style={{ borderTop: '1px solid #f0f0f0', padding: '12px 16px', background: expandedBg(item.location) }}>
                           {isEditing ? editForm() : actionArea(item)}
-                          {item.category && (
-                            <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif" }}>
-                              {item.category}
-                            </span>
-                          )}
+                          {item.category && <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif" }}>{item.category}</span>}
                         </div>
                       )}
                     </div>
