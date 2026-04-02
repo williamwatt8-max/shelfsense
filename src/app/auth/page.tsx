@@ -19,10 +19,14 @@ export default function AuthPage() {
     setLoading(true)
 
     if (mode === 'signup') {
-      const { error: err } = await signUp(email, password)
+      const { data, error: err } = await signUp(email, password)
       if (err) {
         setError(err.message)
+      } else if (data.session) {
+        // Email confirmation disabled — session returned immediately
+        window.location.href = '/'
       } else {
+        // Email confirmation enabled — show check-email screen
         setEmailSent(true)
       }
     } else {
@@ -37,8 +41,7 @@ export default function AuthPage() {
           setError(err.message)
         }
       } else {
-        router.push('/')
-        router.refresh()
+        window.location.href = '/'
       }
     }
 

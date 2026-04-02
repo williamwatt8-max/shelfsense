@@ -1,7 +1,12 @@
 import { supabase } from './supabase'
 
 export async function signUp(email: string, password: string) {
-  return supabase.auth.signUp({ email, password })
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '')
+  return supabase.auth.signUp({
+    email,
+    password,
+    options: { emailRedirectTo: `${siteUrl}/auth` },
+  })
 }
 
 export async function signIn(email: string, password: string) {

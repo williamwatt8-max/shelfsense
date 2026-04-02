@@ -46,6 +46,7 @@ export default function InventoryPage() {
   const [openingItem, setOpeningItem]   = useState<OpeningItemState | null>(null)
   const [selectMode, setSelectMode]     = useState<boolean>(false)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
+  const [toast, setToast]               = useState<string | null>(null)
   const [voiceListening, setVoiceListening]     = useState(false)
   const [voiceProcessing, setVoiceProcessing]   = useState(false)
   const [voiceTranscript, setVoiceTranscript]   = useState<string | null>(null)
@@ -224,17 +225,49 @@ export default function InventoryPage() {
     }
     const recognition = new SR()
     recognition.lang = 'en-GB'
-    recognition.interimResults = false
+    recognition.continuous = true
+    recognition.interimResults = true
     recognition.maxAlternatives = 1
+
+    let finalTranscript = ''
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null
+    const absoluteTimer = setTimeout(() => recognition.stop(), 8000)
+
     setVoiceListening(true)
     setVoiceAction(null)
     setVoiceError(null)
     setVoiceTranscript(null)
     recognition.start()
-    recognition.onresult = async (e: any) => {
-      const transcript = e.results[0][0].transcript
-      setVoiceTranscript(transcript)
+
+    recognition.onresult = (e: any) => {
+      if (silenceTimer) clearTimeout(silenceTimer)
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' '
+      }
+      setVoiceTranscript(finalTranscript.trim() || null)
+      // Stop 3 s after last word
+      silenceTimer = setTimeout(() => recognition.stop(), 3000)
+    }
+
+    recognition.onerror = (e: any) => {
+      if (e.error !== 'no-speech') {
+        clearTimeout(absoluteTimer)
+        if (silenceTimer) clearTimeout(silenceTimer)
+        setVoiceListening(false)
+        setVoiceError("Couldn't hear you — please try again.")
+      }
+    }
+
+    recognition.onend = async () => {
+      clearTimeout(absoluteTimer)
+      if (silenceTimer) clearTimeout(silenceTimer)
       setVoiceListening(false)
+      const transcript = finalTranscript.trim()
+      if (!transcript) {
+        setVoiceError('No speech detected — tap the mic and try again.')
+        return
+      }
+      setVoiceTranscript(transcript)
       setVoiceProcessing(true)
       try {
         const res = await fetch('/api/voice-update', {
@@ -254,12 +287,6 @@ export default function InventoryPage() {
       }
       setVoiceProcessing(false)
     }
-    recognition.onerror = (e: any) => {
-      setVoiceListening(false)
-      if (e.error === 'no-speech') setVoiceError('No speech detected — tap the mic and try again.')
-      else setVoiceError("Couldn't hear you — please try again.")
-    }
-    recognition.onend = () => setVoiceListening(false)
   }
 
   async function applyVoiceAction() {
@@ -322,7 +349,8 @@ export default function InventoryPage() {
     const today = new Date().toISOString().split('T')[0]
     const updates: Record<string, string | null> = { opened_at: today }
     if (updateExpiry && openingItem.suggestedExpiry) updates.expiry_date = openingItem.suggestedExpiry
-    await supabase.from('inventory_items').update(updates).eq('id', openingItem.id)
+    const { error: updateErr } = await supabase.from('inventory_items').update(updates).eq('id', openingItem.id)
+    if (updateErr) { alert('Error saving: ' + updateErr.message); return }
     await supabase.from('inventory_events').insert({
       inventory_item_id: openingItem.id,
       type: 'opened',
@@ -330,6 +358,9 @@ export default function InventoryPage() {
     })
     setOpeningItem(null)
     loadItems()
+    const msg = updateExpiry && openingItem.suggestedExpiry ? '✅ Marked as opened — expiry updated!' : '✅ Marked as opened'
+    setToast(msg)
+    setTimeout(() => setToast(null), 2500)
   }
 
   // ── Filtering & sorting ────────────────────────────────────────��──────────
@@ -441,12 +472,18 @@ export default function InventoryPage() {
       </p>
       {openingItem!.hasShelfLife ? (
         <>
-          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 4px' }}>
+          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 8px' }}>
             Typical shelf life after opening: <strong style={{ color: '#ff7043' }}>{openingItem!.rangeText}</strong>
           </p>
-          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 14px' }}>
-            Suggested new expiry: <strong style={{ color: '#2d2d2d' }}>{formatDisplayDate(openingItem!.suggestedExpiry)}</strong>
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888' }}>New expiry:</span>
+            <input
+              type="date"
+              value={openingItem!.suggestedExpiry}
+              onChange={e => setOpeningItem({ ...openingItem!, suggestedExpiry: e.target.value })}
+              style={{ border: '2px solid #ffe0cc', borderRadius: '8px', padding: '6px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px' }}
+            />
+          </div>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button onClick={() => confirmOpened(true)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>✅ Update expiry</button>
             <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)' }}>📅 Just record opened</button>
@@ -683,7 +720,14 @@ export default function InventoryPage() {
             {voiceListening && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span style={{ fontSize: '22px', display: 'inline-block', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>🎤</span>
-                <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#ff4444' }}>Listening...</span>
+                <div>
+                  <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#ff4444' }}>
+                    {voiceTranscript ? 'Got it...' : 'Listening — say something'}
+                  </span>
+                  {voiceTranscript && (
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#bbb', margin: '2px 0 0' }}>"{voiceTranscript}"</p>
+                  )}
+                </div>
               </div>
             )}
             {voiceProcessing && (
@@ -834,6 +878,13 @@ export default function InventoryPage() {
         )}
 
       </div>
+
+      {/* ── Toast ── */}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: selectMode ? '80px' : '24px', left: '50%', transform: 'translateX(-50%)', background: '#2d2d2d', color: 'white', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', padding: '12px 22px', borderRadius: '50px', boxShadow: '0 6px 24px rgba(0,0,0,0.2)', zIndex: 2000, whiteSpace: 'nowrap' }}>
+          {toast}
+        </div>
+      )}
     </main>
   )
 }

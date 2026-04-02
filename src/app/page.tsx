@@ -51,15 +51,42 @@ export default function Home() {
     }
     const recognition = new SR()
     recognition.lang = 'en-GB'
-    recognition.interimResults = false
+    recognition.continuous = true
+    recognition.interimResults = true
     recognition.maxAlternatives = 1
+
+    let finalTranscript = ''
+    let silenceTimer: ReturnType<typeof setTimeout> | null = null
+    const absoluteTimer = setTimeout(() => recognition.stop(), 8000)
+
     setVoiceExpiryListening(true)
     setVoiceExpiryFilled([])
     setVoiceExpiryError(null)
     recognition.start()
-    recognition.onresult = async (e: any) => {
-      const transcript = e.results[0][0].transcript
+
+    recognition.onresult = (e: any) => {
+      if (silenceTimer) clearTimeout(silenceTimer)
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' '
+      }
+      silenceTimer = setTimeout(() => recognition.stop(), 3000)
+    }
+
+    recognition.onerror = (e: any) => {
+      if (e.error !== 'no-speech') {
+        clearTimeout(absoluteTimer)
+        if (silenceTimer) clearTimeout(silenceTimer)
+        setVoiceExpiryListening(false)
+        setVoiceExpiryError("Couldn't hear you — please try again.")
+      }
+    }
+
+    recognition.onend = async () => {
+      clearTimeout(absoluteTimer)
+      if (silenceTimer) clearTimeout(silenceTimer)
       setVoiceExpiryListening(false)
+      const transcript = finalTranscript.trim()
+      if (!transcript) { setVoiceExpiryError('No speech detected — try again.'); return }
       setVoiceExpiryProcessing(true)
       try {
         const res = await fetch('/api/voice-expiry', {
@@ -91,12 +118,6 @@ export default function Home() {
       }
       setVoiceExpiryProcessing(false)
     }
-    recognition.onerror = (e: any) => {
-      setVoiceExpiryListening(false)
-      if (e.error === 'no-speech') setVoiceExpiryError('No speech detected — try again.')
-      else setVoiceExpiryError("Couldn't hear you — please try again.")
-    }
-    recognition.onend = () => setVoiceExpiryListening(false)
   }
 
   async function handleSave() {
