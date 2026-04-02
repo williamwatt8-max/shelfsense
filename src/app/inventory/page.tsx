@@ -22,6 +22,15 @@ type GroupedItem = {
 type UsingItemState  = { id: string; used: number; unit: string; maxQty: number }
 type OpeningItemState = { id: string; name: string; category: string | null; suggestedExpiry: string; rangeText: string; hasShelfLife: boolean }
 type EditingItemState = { id: string; quantity: number; unit: string; expiry_date: string; location: string }
+type VoiceAction = {
+  matched_item: string | null
+  action: 'used_all' | 'used_partial' | 'discard' | 'set_expiry' | 'mark_opened' | null
+  quantity: number | null
+  unit: string | null
+  expiry_date: string | null
+  confidence: number
+  display_text: string | null
+}
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -35,6 +44,13 @@ export default function InventoryPage() {
   const [editingItem, setEditingItem]   = useState<EditingItemState | null>(null)
   const [usingItem, setUsingItem]       = useState<UsingItemState | null>(null)
   const [openingItem, setOpeningItem]   = useState<OpeningItemState | null>(null)
+  const [selectMode, setSelectMode]     = useState<boolean>(false)
+  const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
+  const [voiceListening, setVoiceListening]     = useState(false)
+  const [voiceProcessing, setVoiceProcessing]   = useState(false)
+  const [voiceTranscript, setVoiceTranscript]   = useState<string | null>(null)
+  const [voiceAction, setVoiceAction]           = useState<VoiceAction | null>(null)
+  const [voiceError, setVoiceError]             = useState<string | null>(null)
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -150,6 +166,132 @@ export default function InventoryPage() {
     await supabase.from('inventory_items').update({ location: loc }).eq('id', id)
     await supabase.from('inventory_events').insert({ inventory_item_id: id, type: 'moved' })
     loadItems()
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(filtered.map(i => i.id)))
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set())
+  }
+
+  function toggleGroupSelect(group: GroupedItem) {
+    const ids = group.batches.map(b => b.id)
+    const allSelected = ids.every(id => selectedIds.has(id))
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (allSelected) ids.forEach(id => next.delete(id))
+      else ids.forEach(id => next.add(id))
+      return next
+    })
+  }
+
+  function isGroupSelected(group: GroupedItem): boolean {
+    return group.batches.every(b => selectedIds.has(b.id))
+  }
+
+  function isGroupPartial(group: GroupedItem): boolean {
+    const count = group.batches.filter(b => selectedIds.has(b.id)).length
+    return count > 0 && count < group.batches.length
+  }
+
+  async function deleteSelected() {
+    if (selectedIds.size === 0) return
+    await supabase.from('inventory_items').update({ status: 'removed' }).in('id', Array.from(selectedIds))
+    setSelectedIds(new Set())
+    setSelectMode(false)
+    loadItems()
+  }
+
+  function startVoiceListening() {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SR) {
+      setVoiceError("Voice input isn't supported in this browser. Try Chrome or Safari.")
+      return
+    }
+    const recognition = new SR()
+    recognition.lang = 'en-GB'
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    setVoiceListening(true)
+    setVoiceAction(null)
+    setVoiceError(null)
+    setVoiceTranscript(null)
+    recognition.start()
+    recognition.onresult = async (e: any) => {
+      const transcript = e.results[0][0].transcript
+      setVoiceTranscript(transcript)
+      setVoiceListening(false)
+      setVoiceProcessing(true)
+      try {
+        const res = await fetch('/api/voice-update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript, items: items.map(i => i.name) }),
+        })
+        const result = await res.json()
+        if (result.error) throw new Error(result.error)
+        if (!result.matched_item || result.confidence < 0.5) {
+          setVoiceError("I didn't catch that — try saying something like \"I used the milk\" or \"discard the bread\".")
+        } else {
+          setVoiceAction(result)
+        }
+      } catch {
+        setVoiceError('Something went wrong. Please try again.')
+      }
+      setVoiceProcessing(false)
+    }
+    recognition.onerror = (e: any) => {
+      setVoiceListening(false)
+      if (e.error === 'no-speech') setVoiceError('No speech detected — tap the mic and try again.')
+      else setVoiceError("Couldn't hear you — please try again.")
+    }
+    recognition.onend = () => setVoiceListening(false)
+  }
+
+  async function applyVoiceAction() {
+    if (!voiceAction?.matched_item || !voiceAction.action) return
+    const name = voiceAction.matched_item.toLowerCase()
+    const item =
+      items.find(i => i.name.toLowerCase() === name) ||
+      items.find(i => i.name.toLowerCase().includes(name)) ||
+      items.find(i => name.includes(i.name.toLowerCase()))
+    if (!item) {
+      setVoiceError(`Couldn't find "${voiceAction.matched_item}" in your inventory.`)
+      setVoiceAction(null)
+      return
+    }
+    if (voiceAction.action === 'used_all') {
+      await markUsed(item.id)
+    } else if (voiceAction.action === 'discard') {
+      await markDiscarded(item.id)
+    } else if (voiceAction.action === 'used_partial' && voiceAction.quantity != null) {
+      const remaining = parseFloat((item.quantity - voiceAction.quantity).toFixed(3))
+      if (remaining <= 0) {
+        await supabase.from('inventory_items').update({ status: 'used' }).eq('id', item.id)
+        await supabase.from('inventory_events').insert({ inventory_item_id: item.id, type: 'used', quantity_delta: -item.quantity })
+      } else {
+        await supabase.from('inventory_items').update({ quantity: remaining }).eq('id', item.id)
+        await supabase.from('inventory_events').insert({ inventory_item_id: item.id, type: 'used_some', quantity_delta: -voiceAction.quantity })
+      }
+      loadItems()
+    } else if (voiceAction.action === 'set_expiry' && voiceAction.expiry_date) {
+      await supabase.from('inventory_items').update({ expiry_date: voiceAction.expiry_date }).eq('id', item.id)
+      loadItems()
+    } else if (voiceAction.action === 'mark_opened') {
+      startOpening(item)
+    }
+    setVoiceAction(null)
+    setVoiceTranscript(null)
   }
 
   function startOpening(item: InventoryItemWithPrice) {
@@ -417,6 +559,13 @@ export default function InventoryPage() {
     )
   }
 
+  const SelectBox = ({ checked, partial, onToggle }: { checked: boolean; partial?: boolean; onToggle: (e: React.MouseEvent) => void }) => (
+    <div onClick={onToggle} style={{ width: '22px', height: '22px', borderRadius: '6px', border: `2px solid ${checked || partial ? '#ff7043' : '#ddd'}`, background: checked ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : partial ? 'rgba(255,112,67,0.15)' : 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, cursor: 'pointer' }}>
+      {checked && <span style={{ color: 'white', fontSize: '13px', lineHeight: 1 }}>✓</span>}
+      {!checked && partial && <span style={{ color: '#ff7043', fontSize: '14px', lineHeight: 1 }}>–</span>}
+    </div>
+  )
+
   // ── Loading ───────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -431,11 +580,12 @@ export default function InventoryPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <main style={warmStyle}>
+    <main style={{ ...warmStyle, padding: `72px 24px ${selectMode ? '100px' : '32px'}` }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
         .item-row { transition: all 0.15s ease; }
         .item-row:active { transform: scale(0.99); }
+        @keyframes voice-pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.12);opacity:0.85} }
       `}</style>
       <div style={{ maxWidth: '640px', margin: '0 auto' }}>
 
@@ -445,9 +595,24 @@ export default function InventoryPage() {
             <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '36px', color: '#2d2d2d', margin: 0 }}>Your Inventory</h1>
             <p style={{ color: '#aaa', fontWeight: 700, fontSize: '13px', margin: 0 }}>{items.length} items tracked</p>
           </div>
-          <a href="/" style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 18px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 4px 16px rgba(255,112,67,0.4)', whiteSpace: 'nowrap' }}>
-            + Scan Receipt
-          </a>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              onClick={startVoiceListening}
+              disabled={voiceListening || voiceProcessing || selectMode}
+              title="Voice command"
+              style={{ width: '44px', height: '44px', borderRadius: '50%', border: 'none', background: voiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '20px', cursor: voiceListening || voiceProcessing || selectMode ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: voiceListening ? '0 4px 16px rgba(255,68,68,0.55)' : '0 4px 16px rgba(255,112,67,0.4)', animation: voiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none', flexShrink: 0, opacity: voiceProcessing || selectMode ? 0.5 : 1 }}
+            >
+              🎤
+            </button>
+            <button onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); setExpandedId(null) }} style={{ ...btnBase, background: selectMode ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: selectMode ? 'white' : '#888', boxShadow: selectMode ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', padding: '10px 16px', fontSize: '14px' }}>
+              ☑ Select
+            </button>
+            {!selectMode && (
+              <a href="/" style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 18px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 4px 16px rgba(255,112,67,0.4)', whiteSpace: 'nowrap' }}>
+                + Scan Receipt
+              </a>
+            )}
+          </div>
         </div>
 
         {/* ── Stock value card ── */}
@@ -508,18 +673,68 @@ export default function InventoryPage() {
           })}
         </div>
 
-        {/* ── Sort & group ── */}
+        {/* ── Voice feedback card ── */}
+        {(voiceListening || voiceProcessing || voiceAction || voiceError) && (
+          <div style={{ background: 'white', borderRadius: '16px', padding: '16px 18px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.09)', border: '1.5px solid rgba(255,112,67,0.2)' }}>
+            {voiceListening && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '22px', display: 'inline-block', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>🎤</span>
+                <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#ff4444' }}>Listening...</span>
+              </div>
+            )}
+            {voiceProcessing && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '22px' }}>✨</span>
+                <div>
+                  <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#ff9a3c' }}>Understanding...</span>
+                  {voiceTranscript && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#bbb', margin: '2px 0 0' }}>"{voiceTranscript}"</p>}
+                </div>
+              </div>
+            )}
+            {voiceAction && !voiceListening && !voiceProcessing && (
+              <>
+                {voiceTranscript && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', margin: '0 0 6px' }}>"{voiceTranscript}"</p>}
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: '0 0 12px' }}>{voiceAction.display_text}</p>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={applyVoiceAction} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)', padding: '9px 20px' }}>✅ Yes, do it</button>
+                  <button onClick={() => { setVoiceAction(null); setVoiceTranscript(null) }} style={{ ...btnBase, background: '#f5f5f5', color: '#888', padding: '9px 16px' }}>✕ Cancel</button>
+                </div>
+              </>
+            )}
+            {voiceError && !voiceListening && !voiceProcessing && (
+              <>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#ff4444', margin: '0 0 10px' }}>😕 {voiceError}</p>
+                <button onClick={() => { setVoiceError(null); setVoiceTranscript(null) }} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Dismiss</button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Sort & group / Select controls ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-            <option value="date_added">Date Added</option>
-            <option value="expiry">Expiry (soonest first)</option>
-            <option value="name">Name A–Z</option>
-            <option value="location">Location</option>
-            <option value="category">Category</option>
-          </select>
-          <button onClick={() => { setGrouped(!grouped); setExpandedId(null) }} style={{ padding: '6px 16px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: grouped ? 'white' : '#888', boxShadow: grouped ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.2s' }}>
-            {grouped ? '⊞ Grouped' : '☰ Ungrouped'}
-          </button>
+          {selectMode ? (
+            <>
+              <button onClick={selectAll} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)', padding: '7px 16px' }}>
+                Select All ({filtered.length})
+              </button>
+              <button onClick={clearSelection} style={{ ...btnBase, background: 'white', color: '#888', border: '1.5px solid #eee', padding: '7px 16px' }}>
+                Clear
+              </button>
+            </>
+          ) : (
+            <>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+                <option value="date_added">Date Added</option>
+                <option value="expiry">Expiry (soonest first)</option>
+                <option value="name">Name A–Z</option>
+                <option value="location">Location</option>
+                <option value="category">Category</option>
+              </select>
+              <button onClick={() => { setGrouped(!grouped); setExpandedId(null) }} style={{ padding: '6px 16px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: grouped ? 'white' : '#888', boxShadow: grouped ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.2s' }}>
+                {grouped ? '⊞ Grouped' : '☰ Ungrouped'}
+              </button>
+            </>
+          )}
         </div>
 
         {/* ── Item list ── */}
@@ -535,12 +750,13 @@ export default function InventoryPage() {
                   const repBatch = group.batches[0]
                   const openedAt = !hasBatches ? repBatch.opened_at : null
                   return (
-                    <div key={group.name} className="item-row" style={{ background: cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: cardBorder(group.location) }}>
-                      <div onClick={() => setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
+                    <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
+                      <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
+                        {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
                         <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} hasBatches={hasBatches} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
-                          <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>
+                          {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
                         </div>
                       </div>
                       {isExpanded && (
@@ -591,12 +807,13 @@ export default function InventoryPage() {
                   const isExpanded = expandedId === item.id
                   const isEditing = editingItem?.id === item.id
                   return (
-                    <div key={item.id} className="item-row" style={{ background: cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: cardBorder(item.location) }}>
-                      <div onClick={() => setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
+                    <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
+                      <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
+                        {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
                         <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
-                          <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>
+                          {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
                         </div>
                       </div>
                       {isExpanded && (

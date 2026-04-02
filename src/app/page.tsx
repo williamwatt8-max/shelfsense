@@ -13,6 +13,10 @@ export default function Home() {
   const [items, setItems] = useState<ReviewItem[]>([])
   const [preview, setPreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [voiceExpiryListening, setVoiceExpiryListening]   = useState(false)
+  const [voiceExpiryProcessing, setVoiceExpiryProcessing] = useState(false)
+  const [voiceExpiryFilled, setVoiceExpiryFilled]         = useState<{ name: string; date: string }[]>([])
+  const [voiceExpiryError, setVoiceExpiryError]           = useState<string | null>(null)
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -37,6 +41,62 @@ export default function Home() {
       alert('Something went wrong. Try again.')
     }
     setLoading(false)
+  }
+
+  function startVoiceExpiry() {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SR) {
+      setVoiceExpiryError("Voice input isn't supported in this browser. Try Chrome or Safari.")
+      return
+    }
+    const recognition = new SR()
+    recognition.lang = 'en-GB'
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    setVoiceExpiryListening(true)
+    setVoiceExpiryFilled([])
+    setVoiceExpiryError(null)
+    recognition.start()
+    recognition.onresult = async (e: any) => {
+      const transcript = e.results[0][0].transcript
+      setVoiceExpiryListening(false)
+      setVoiceExpiryProcessing(true)
+      try {
+        const res = await fetch('/api/voice-expiry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transcript, items: items.map(i => i.normalized_name) }),
+        })
+        const result = await res.json()
+        if (result.error) throw new Error(result.error)
+        const filled: { name: string; date: string }[] = []
+        const updated = [...items]
+        for (const match of (result.matches || [])) {
+          const matchName = match.item_name.toLowerCase()
+          const idx = updated.findIndex(i =>
+            i.normalized_name.toLowerCase() === matchName ||
+            i.normalized_name.toLowerCase().includes(matchName) ||
+            matchName.includes(i.normalized_name.toLowerCase())
+          )
+          if (idx !== -1 && match.expiry_date) {
+            updated[idx] = { ...updated[idx], expiry_date: match.expiry_date }
+            filled.push({ name: updated[idx].normalized_name, date: match.expiry_date })
+          }
+        }
+        setItems(updated)
+        if (filled.length > 0) setVoiceExpiryFilled(filled)
+        else setVoiceExpiryError("Couldn't match any items — try again.")
+      } catch {
+        setVoiceExpiryError('Something went wrong. Please try again.')
+      }
+      setVoiceExpiryProcessing(false)
+    }
+    recognition.onerror = (e: any) => {
+      setVoiceExpiryListening(false)
+      if (e.error === 'no-speech') setVoiceExpiryError('No speech detected — try again.')
+      else setVoiceExpiryError("Couldn't hear you — please try again.")
+    }
+    recognition.onend = () => setVoiceExpiryListening(false)
   }
 
   async function handleSave() {
@@ -132,12 +192,49 @@ export default function Home() {
   if (step === 'reviewing') {
     return (
       <main style={{...warmStyle, padding:'72px 24px 32px'}}>
-        <style>{`@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');`}</style>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
+          @keyframes voice-pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.12);opacity:0.85} }
+        `}</style>
         <div style={{maxWidth:'640px',margin:'0 auto'}}>
           <a href="/" style={{color:'#ff7043',fontWeight:700,fontSize:'14px',textDecoration:'none',fontFamily:"'Nunito',sans-serif"}}>← Back</a>
           <h1 style={{fontFamily:"'Fredoka One',cursive",fontSize:'36px',color:'#2d2d2d',margin:'8px 0 4px'}}>Review Items</h1>
           <p style={{color:'#888',fontWeight:700,fontSize:'15px',margin:'0 0 4px',fontFamily:"'Nunito',sans-serif"}}>From {retailer} — edit anything that looks wrong</p>
-          {total && <p style={{color:'#ff7043',fontWeight:800,fontSize:'15px',margin:'0 0 24px',fontFamily:"'Nunito',sans-serif"}}>Total: £{total.toFixed(2)}</p>}
+          {total && <p style={{color:'#ff7043',fontWeight:800,fontSize:'15px',margin:'0 0 12px',fontFamily:"'Nunito',sans-serif"}}>Total: £{total.toFixed(2)}</p>}
+
+          {/* ── Voice expiry button ── */}
+          <div style={{marginBottom:'20px'}}>
+            <button
+              onClick={startVoiceExpiry}
+              disabled={voiceExpiryListening || voiceExpiryProcessing}
+              style={{display:'flex',alignItems:'center',gap:'10px',background: voiceExpiryListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',border:'none',borderRadius:'50px',padding:'11px 22px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'14px',cursor: voiceExpiryListening || voiceExpiryProcessing ? 'default' : 'pointer',boxShadow: voiceExpiryListening ? '0 4px 16px rgba(255,68,68,0.45)' : '0 4px 16px rgba(255,112,67,0.4)',opacity: voiceExpiryProcessing ? 0.7 : 1}}
+            >
+              <span style={{fontSize:'18px',display:'inline-block',animation: voiceExpiryListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none'}}>🎤</span>
+              {voiceExpiryListening ? 'Listening...' : voiceExpiryProcessing ? 'Understanding...' : 'Set expiry dates by voice'}
+            </button>
+            {!voiceExpiryListening && !voiceExpiryProcessing && voiceExpiryFilled.length === 0 && !voiceExpiryError && (
+              <p style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'12px',color:'#bbb',margin:'6px 0 0 4px'}}>e.g. "milk expires in 3 days, chicken is good until Sunday"</p>
+            )}
+            {/* Filled summary */}
+            {voiceExpiryFilled.length > 0 && (
+              <div style={{background:'#f0fff4',border:'1.5px solid rgba(76,175,80,0.25)',borderRadius:'12px',padding:'12px 14px',marginTop:'10px'}}>
+                <p style={{fontFamily:"'Fredoka One',cursive",fontSize:'15px',color:'#388e3c',margin:'0 0 8px'}}>✅ Filled in {voiceExpiryFilled.length} expiry date{voiceExpiryFilled.length > 1 ? 's' : ''}:</p>
+                {voiceExpiryFilled.map((f, i) => (
+                  <p key={i} style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#555',margin:'2px 0'}}>
+                    {f.name} → {new Date(f.date).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})}
+                  </p>
+                ))}
+                <button onClick={() => setVoiceExpiryFilled([])} style={{marginTop:'8px',background:'transparent',border:'none',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'12px',color:'#aaa',cursor:'pointer',padding:0}}>Dismiss</button>
+              </div>
+            )}
+            {/* Error */}
+            {voiceExpiryError && !voiceExpiryListening && !voiceExpiryProcessing && (
+              <div style={{background:'#fff0f0',border:'1.5px solid rgba(255,68,68,0.2)',borderRadius:'12px',padding:'10px 14px',marginTop:'10px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px'}}>
+                <p style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#ff4444',margin:0}}>😕 {voiceExpiryError}</p>
+                <button onClick={() => setVoiceExpiryError(null)} style={{background:'transparent',border:'none',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'12px',color:'#aaa',cursor:'pointer',flexShrink:0}}>✕</button>
+              </div>
+            )}
+          </div>
           <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
             {items.map((item, index) => (
               <div key={item.id} style={{background:'white',borderRadius:'16px',padding:'16px',boxShadow:'0 4px 16px rgba(0,0,0,0.08)',border: item.confidence < 0.8 ? '2px solid #ffb347' : '2px solid transparent'}}>
