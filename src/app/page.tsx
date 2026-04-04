@@ -31,8 +31,13 @@ export default function Home() {
       if (result.error) { alert('Error: ' + result.error); setLoading(false); return }
       setRetailer(result.retailer_name || 'Unknown Store')
       setTotal(result.total || null)
+      // Preserve exact receipt order — id = stable receipt_order index
       setItems(result.items.map((item: any, i: number) => ({
-        ...item, id: String(i), selected: true,
+        ...item,
+        id: String(i),
+        receipt_order: i,
+        selected: true,
+        amount_per_unit: null,
         location: suggestLocation(item.normalized_name, item.category) as StorageLocation,
         expiry_date: null,
       })))
@@ -150,6 +155,8 @@ export default function Home() {
         name: item.normalized_name,
         quantity: item.quantity,
         quantity_original: item.quantity,
+        count: item.quantity > 1 && Number.isInteger(item.quantity) ? item.quantity : null,
+        amount_per_unit: item.amount_per_unit,
         unit: item.unit,
         location: item.location,
         category: item.category || null,
@@ -217,9 +224,11 @@ export default function Home() {
   }
 
   if (step === 'reviewing') {
-    const REVIEW_UNITS = ['item', 'pack', 'bag', 'box', 'bottle', 'tin', 'loaf', 'fillet', 'g', 'kg', 'ml', 'l']
+    // Measurement units first (for amount_per_unit), then item types
+    const REVIEW_UNITS = ['g', 'kg', 'ml', 'l', 'item', 'pack', 'bag', 'box', 'bottle', 'tin', 'loaf', 'fillet']
     const REVIEW_CATEGORIES = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
-    const fieldStyle = { border: '2px solid #eee', borderRadius: '8px', padding: '7px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px' }
+    // fs = shared field style for inputs/selects in review cards
+    const fs: React.CSSProperties = { border: '2px solid #eee', borderRadius: '8px', padding: '7px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: 'white' }
     return (
       <main style={{...warmStyle, padding:'72px 24px 32px'}}>
         <style>{`
@@ -266,7 +275,7 @@ export default function Home() {
             )}
           </div>
 
-          {/* ── Item cards ── */}
+          {/* ── Item cards — displayed in exact receipt order ── */}
           <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
             {items.map((item, index) => {
               function upd(patch: Partial<typeof item>) {
@@ -274,11 +283,12 @@ export default function Home() {
                 next[index] = { ...next[index], ...patch }
                 setItems(next)
               }
+              const safeUnit = REVIEW_UNITS.includes(item.unit) ? item.unit : 'g'
               return (
                 <div key={item.id} style={{background:'white',borderRadius:'14px',padding:'14px 16px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',border: item.confidence < 0.8 ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent'}}>
 
-                  {/* Row 1: checkbox + name + price */}
-                  <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
+                  {/* Row 1: checkbox + name [+ low-confidence badge] */}
+                  <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
                     <input
                       type="checkbox"
                       checked={item.selected}
@@ -289,73 +299,72 @@ export default function Home() {
                       type="text"
                       value={item.normalized_name}
                       onChange={e => upd({ normalized_name: e.target.value })}
-                      style={{flex:1,border:'2px solid #eee',borderRadius:'8px',padding:'7px 10px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'14px',color:'#2d2d2d',minWidth:0}}
+                      style={{flex:1,border:'2px solid #eee',borderRadius:'8px',padding:'8px 10px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'14px',color:'#2d2d2d',minWidth:0}}
                     />
-                    <div style={{display:'flex',alignItems:'center',gap:'2px',flexShrink:0}}>
-                      <span style={{color:'#bbb',fontWeight:700,fontSize:'13px',fontFamily:"'Nunito',sans-serif"}}>£</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={item.price ?? ''}
-                        placeholder="—"
-                        onChange={e => upd({ price: e.target.value !== '' ? Number(e.target.value) : null })}
-                        style={{...fieldStyle,width:'58px',color:'#ff7043',textAlign:'right'}}
-                      />
-                    </div>
                     {item.confidence < 0.8 && (
-                      <span style={{background:'rgba(255,179,71,0.15)',color:'#e08000',fontSize:'11px',fontWeight:700,padding:'3px 7px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0}}>⚠ low</span>
+                      <span style={{background:'rgba(255,179,71,0.15)',color:'#e08000',fontSize:'11px',fontWeight:700,padding:'3px 7px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0,whiteSpace:'nowrap'}}>⚠ low</span>
                     )}
                   </div>
 
-                  {/* Row 2: qty + unit + location + category */}
-                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap',alignItems:'center'}}>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.1}
-                      value={item.quantity}
-                      onChange={e => upd({ quantity: Number(e.target.value) })}
-                      style={{...fieldStyle,width:'62px',textAlign:'center'}}
-                    />
-                    <select
-                      value={REVIEW_UNITS.includes(item.unit) ? item.unit : 'item'}
-                      onChange={e => upd({ unit: e.target.value })}
-                      style={{...fieldStyle}}
-                    >
+                  {/* Row 2: count × amount + unit + price */}
+                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap',alignItems:'center',marginBottom:'8px'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'4px'}}>
+                      <input
+                        type="number" min={1} step={1}
+                        value={item.quantity}
+                        onChange={e => upd({ quantity: Number(e.target.value) })}
+                        style={{...fs, width:'52px', textAlign:'center'}}
+                        title="Count"
+                      />
+                      <span style={{color:'#ccc',fontWeight:700,fontSize:'14px',lineHeight:1}}>×</span>
+                      <input
+                        type="number" min={0} step={0.1}
+                        value={item.amount_per_unit ?? ''}
+                        placeholder="amt"
+                        onChange={e => upd({ amount_per_unit: e.target.value !== '' ? Number(e.target.value) : null })}
+                        style={{...fs, width:'60px', textAlign:'center', color: item.amount_per_unit ? '#2d2d2d' : '#bbb'}}
+                        title="Amount per unit"
+                      />
+                    </div>
+                    <select value={safeUnit} onChange={e => upd({ unit: e.target.value })} style={fs} title="Unit">
                       {REVIEW_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
                     </select>
-                    <select
-                      value={item.location}
-                      onChange={e => upd({ location: e.target.value as StorageLocation })}
-                      style={{...fieldStyle}}
-                    >
+                    <div style={{display:'flex',alignItems:'center',gap:'2px',marginLeft:'auto'}}>
+                      <span style={{color:'#bbb',fontWeight:700,fontSize:'13px',fontFamily:"'Nunito',sans-serif"}}>£</span>
+                      <input
+                        type="number" min={0} step={0.01}
+                        value={item.price ?? ''}
+                        placeholder="—"
+                        onChange={e => upd({ price: e.target.value !== '' ? Number(e.target.value) : null })}
+                        style={{...fs, width:'70px', color:'#ff7043', textAlign:'right'}}
+                        title="Price"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Row 3: location + category */}
+                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom: item.location !== 'household' ? '8px' : '0'}}>
+                    <select value={item.location} onChange={e => upd({ location: e.target.value as StorageLocation })} style={{...fs, flex:1}}>
                       <option value="fridge">❄️ Fridge</option>
                       <option value="freezer">🧊 Freezer</option>
                       <option value="cupboard">🗄️ Cupboard</option>
                       <option value="household">🏠 Household</option>
                       <option value="other">📦 Other</option>
                     </select>
-                    <select
-                      value={item.category || ''}
-                      onChange={e => upd({ category: e.target.value || null })}
-                      style={{...fieldStyle}}
-                    >
+                    <select value={item.category || ''} onChange={e => upd({ category: e.target.value || null })} style={{...fs, flex:1}}>
                       <option value="">— category —</option>
                       {REVIEW_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
 
-                  {/* Row 3: expiry (hidden for household) */}
+                  {/* Row 4: expiry (hidden for household) */}
                   {item.location !== 'household' && (
-                    <div style={{marginTop:'8px'}}>
-                      <input
-                        type="date"
-                        value={item.expiry_date || ''}
-                        onChange={e => upd({ expiry_date: e.target.value || null })}
-                        style={{...fieldStyle,color: item.expiry_date ? '#2d2d2d' : '#bbb'}}
-                      />
-                    </div>
+                    <input
+                      type="date"
+                      value={item.expiry_date || ''}
+                      onChange={e => upd({ expiry_date: e.target.value || null })}
+                      style={{...fs, color: item.expiry_date ? '#2d2d2d' : '#bbb'}}
+                    />
                   )}
 
                 </div>

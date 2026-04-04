@@ -64,6 +64,7 @@ export default function AddPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const photoInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     // Check BarcodeDetector support
@@ -207,6 +208,30 @@ export default function AddPage() {
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
     if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null }
     setCameraActive(false)
+  }
+
+  // iOS / non-BarcodeDetector fallback: send photo to Claude vision to extract barcode digits
+  async function captureBarcode(file: File) {
+    setBarcodeSearching(true)
+    setBarcodeError(null)
+    setBarcodeFound(null)
+    try {
+      const fd = new FormData()
+      fd.append('image', file)
+      const res = await fetch('/api/barcode-image', { method: 'POST', body: fd })
+      const result = await res.json()
+      if (result.found && result.barcode) {
+        setBarcodeInput(result.barcode)
+        setBarcodeSearching(false)
+        lookupBarcode(result.barcode)
+      } else {
+        setBarcodeError("Couldn't read a barcode from the photo — try better lighting, or enter manually.")
+        setBarcodeSearching(false)
+      }
+    } catch {
+      setBarcodeError('Photo scan failed — enter barcode manually.')
+      setBarcodeSearching(false)
+    }
   }
 
   async function lookupBarcode(code: string) {
@@ -432,7 +457,7 @@ export default function AddPage() {
               </div>
             ) : (
               <>
-                {cameraSupported && (
+                {cameraSupported ? (
                   <button
                     onClick={startCamera}
                     style={{ ...btnBase, width: '100%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px', boxShadow: '0 6px 20px rgba(255,112,67,0.35)', marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
@@ -440,9 +465,24 @@ export default function AddPage() {
                     <span style={{ fontSize: '22px' }}>📷</span>
                     Scan barcode with camera
                   </button>
+                ) : (
+                  /* iOS / non-BarcodeDetector: take a photo and let Claude read the barcode */
+                  <label style={{ ...btnBase, width: '100%', background: barcodeSearching ? '#f0f0f0' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: barcodeSearching ? '#bbb' : 'white', fontSize: '16px', padding: '14px', boxShadow: barcodeSearching ? 'none' : '0 6px 20px rgba(255,112,67,0.35)', marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', cursor: barcodeSearching ? 'default' : 'pointer', boxSizing: 'border-box' }}>
+                    <span style={{ fontSize: '22px' }}>📷</span>
+                    {barcodeSearching ? 'Reading barcode...' : 'Take photo of barcode'}
+                    <input
+                      ref={photoInputRef}
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      disabled={barcodeSearching}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) captureBarcode(f); e.target.value = '' }}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
                 )}
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', margin: '0 0 8px', textAlign: 'center' }}>
-                  {cameraSupported ? 'or enter barcode number manually' : 'Enter barcode number'}
+                  or enter barcode number manually
                 </p>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input

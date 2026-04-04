@@ -50,6 +50,7 @@ STEP 3 — EXTRACTION RULES (ALL RETAILERS)
 8. Include ALL charged items: food, household products, toiletries, bags, alcohol — not just food
 9. SKIP these line types for ALL retailers: subtotals, VAT/tax lines, payment method lines (CASH/CARD/VISA), loyalty points, change/cashback, discount summary lines, non-item retailer sections listed in M&S rules above
 10. When uncertain, include the item with lower confidence (0.5–0.7) rather than omitting — the user can remove it during review
+11. PRESERVE RECEIPT ORDER: list items in the exact top-to-bottom order they appear on the receipt — do not reorder, group, or sort
 
 STEP 4 — OUTPUT FORMAT
 Return ONLY raw JSON — no markdown, no code fences, no explanation:

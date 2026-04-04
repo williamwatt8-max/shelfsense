@@ -66,10 +66,12 @@ export type InventoryEvent = {
 
 export type ReviewItem = {
   id: string
+  receipt_order: number     // index from parser — never re-sorted
   name: string
   normalized_name: string
-  quantity: number
-  unit: string
+  quantity: number          // count (how many units)
+  amount_per_unit: number | null  // size of each unit (e.g. 330 for 330ml)
+  unit: string              // measurement unit for amount_per_unit
   location: StorageLocation
   category: string | null
   expiry_date: string | null
