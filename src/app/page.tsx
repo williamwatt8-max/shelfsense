@@ -154,7 +154,6 @@ export default function Home() {
         category: item.category || null,
         expiry_date: item.expiry_date || null,
         receipt_item_id: receiptItems?.[i]?.id || null,
-        retailer: retailer || null,
         status: 'active',
         user_id: userId,
       }))

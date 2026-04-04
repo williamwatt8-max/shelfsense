@@ -63,7 +63,7 @@ export default function InventoryPage() {
     if (!userId) return
     const { data, error } = await supabase
       .from('inventory_items')
-      .select('*, receipt_items!receipt_item_id(price)')
+      .select('*, receipt_items!receipt_item_id(price, receipts!receipt_id(retailer_name))')
       .eq('user_id', userId)
       .eq('status', 'active')
       .order('created_at', { ascending: false })
@@ -75,6 +75,7 @@ export default function InventoryPage() {
     const mapped: InventoryItemWithPrice[] = (data || []).map((d: any) => ({
       ...d,
       price: d.receipt_items?.price ?? null,
+      retailer: d.receipt_items?.receipts?.retailer_name ?? null,
       receipt_items: undefined,
     }))
     setItems(mapped)
