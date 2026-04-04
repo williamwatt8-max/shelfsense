@@ -6,10 +6,8 @@ import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
 
-// ── Extended type: InventoryItem + join-sourced fields ────────────────────────
-// retailer is not a DB column on inventory_items — it is populated via the
-// receipt_items → receipts join in loadItems() and lives only here.
-type InventoryItemWithPrice = InventoryItem & { price: number | null; retailer: string | null }
+// ── Extended type: InventoryItem + price from receipt_items join ──────────────
+type InventoryItemWithPrice = InventoryItem & { price: number | null }
 
 type GroupedItem = {
   name: string
@@ -65,7 +63,7 @@ export default function InventoryPage() {
     if (!userId) return
     const { data, error } = await supabase
       .from('inventory_items')
-      .select('*, receipt_items!receipt_item_id(price, receipts!receipt_id(retailer_name))')
+      .select('*, receipt_items!receipt_item_id(price)')
       .eq('user_id', userId)
       .eq('status', 'active')
       .order('created_at', { ascending: false })
@@ -77,7 +75,6 @@ export default function InventoryPage() {
     const mapped: InventoryItemWithPrice[] = (data || []).map((d: any) => ({
       ...d,
       price: d.receipt_items?.price ?? null,
-      retailer: d.receipt_items?.receipts?.retailer_name ?? null,
       receipt_items: undefined,
     }))
     setItems(mapped)
@@ -143,11 +140,16 @@ export default function InventoryPage() {
     if (!usingItem) return
     const used = Math.max(0, usingItem.used)
     const remaining = parseFloat((usingItem.maxQty - used).toFixed(3))
+    const today = new Date().toISOString().split('T')[0]
+    const item = items.find(i => i.id === usingItem.id)
+    const autoOpen = item && !item.opened_at
     if (remaining <= 0) {
       await supabase.from('inventory_items').update({ status: 'used' }).eq('id', usingItem.id)
       await supabase.from('inventory_events').insert({ inventory_item_id: usingItem.id, type: 'used', quantity_delta: -usingItem.maxQty })
     } else {
-      await supabase.from('inventory_items').update({ quantity: remaining }).eq('id', usingItem.id)
+      const upd: Record<string, any> = { quantity: remaining }
+      if (autoOpen) upd.opened_at = today
+      await supabase.from('inventory_items').update(upd).eq('id', usingItem.id)
       await supabase.from('inventory_events').insert({ inventory_item_id: usingItem.id, type: 'used_some', quantity_delta: -used })
     }
     setUsingItem(null)
@@ -541,7 +543,7 @@ export default function InventoryPage() {
     if (openingItem?.id === item.id) return openingPanel(item)
     return (
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-        <button onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.quantity }); setOpeningItem(null); setEditingItem(null) }} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ Use some</button>
+        <button onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.quantity }); setOpeningItem(null); setEditingItem(null) }} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ {item.opened_at ? 'Use some' : 'Use / Open'}</button>
         <button onClick={() => markUsed(item.id)} style={{ ...btnBase, background: '#e8f5e9', color: '#388e3c' }}>✅ Used all</button>
         {!item.opened_at && (
           <button onClick={() => { startOpening(item); setEditingItem(null) }} style={{ ...btnBase, background: '#fff3e0', color: '#e65100' }}>📦 Mark opened</button>
@@ -584,37 +586,42 @@ export default function InventoryPage() {
   // ── Item header helpers ───────────────────────────────────────��───────────
 
   type HeaderProps = {
-    name: string; location: string; quantity: number; unit: string
-    createdAt: string; openedAt: string | null; price: number | null
+    name: string; location: string; quantity: number; quantityOriginal?: number | null
+    unit: string; createdAt: string; openedAt: string | null; price: number | null
     retailer?: string | null; hasBatches?: boolean
   }
 
-  const ItemHeaderLeft = ({ name, location, quantity, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-        <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {name}
-        </h3>
-        {location === 'household' && (
-          <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🏠 household</span>
-        )}
-        {openedAt && (
-          <span style={{ background: 'rgba(32,178,170,0.12)', color: '#20b2aa', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🔓 {formatOpenedDate(openedAt)}</span>
-        )}
-        {retailer && (
-          <span style={{ background: 'rgba(255,112,67,0.1)', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>{retailer}</span>
-        )}
-        {hasBatches && (
-          <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>batches</span>
-        )}
+  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => {
+    const qtyDisplay = quantityOriginal && quantityOriginal > quantity
+      ? `${quantity} of ${quantityOriginal} ${unit}`
+      : `${quantity} ${unit}`
+    return (
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {name}
+          </h3>
+          {location === 'household' && (
+            <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🏠 household</span>
+          )}
+          {openedAt && (
+            <span style={{ background: 'rgba(32,178,170,0.12)', color: '#20b2aa', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🔓 {formatOpenedDate(openedAt)}</span>
+          )}
+          {retailer && (
+            <span style={{ background: 'rgba(255,112,67,0.1)', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>{retailer}</span>
+          )}
+          {hasBatches && (
+            <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>batches</span>
+          )}
+        </div>
+        <p style={{ color: '#ccc', fontSize: '11px', fontWeight: 600, margin: '3px 0 0', fontFamily: "'Nunito',sans-serif", display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
+          <span style={{ color: '#bbb', fontWeight: 700 }}>{qtyDisplay} · {location}</span>
+          <span>· added {formatDateAdded(createdAt)}</span>
+          {price != null && <span style={{ color: '#d4a96e' }}>· £{price.toFixed(2)}</span>}
+        </p>
       </div>
-      <p style={{ color: '#ccc', fontSize: '11px', fontWeight: 600, margin: '3px 0 0', fontFamily: "'Nunito',sans-serif", display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
-        <span style={{ color: '#bbb', fontWeight: 700 }}>{quantity} {unit} · {location}</span>
-        <span>· added {formatDateAdded(createdAt)}</span>
-        {price != null && <span style={{ color: '#d4a96e' }}>· £{price.toFixed(2)}</span>}
-      </p>
-    </div>
-  )
+    )
+  }
 
   const cardBg     = (loc: string) => loc === 'household' ? '#f0f4ff' : 'white'
   const cardBorder = (loc: string) => loc === 'household' ? '1.5px solid rgba(100,120,240,0.15)' : 'none'
@@ -684,9 +691,14 @@ export default function InventoryPage() {
               ☑ Select
             </button>
             {!selectMode && (
-              <a href="/" style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 18px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 4px 16px rgba(255,112,67,0.4)', whiteSpace: 'nowrap' }}>
-                + Scan Receipt
-              </a>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <a href="/add" style={{ background: 'white', color: '#ff7043', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 14px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 2px 10px rgba(0,0,0,0.08)', whiteSpace: 'nowrap', border: '1.5px solid rgba(255,112,67,0.2)' }}>
+                  + Add
+                </a>
+                <a href="/" style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 14px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 4px 16px rgba(255,112,67,0.4)', whiteSpace: 'nowrap' }}>
+                  📷 Scan
+                </a>
+              </div>
             )}
           </div>
         </div>
@@ -850,7 +862,7 @@ export default function InventoryPage() {
                     <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
-                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} />
+                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
@@ -907,7 +919,7 @@ export default function InventoryPage() {
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
-                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} quantityOriginal={item.quantity_original} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}

@@ -5,11 +5,12 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 
 const navItems = [
-  { href: '/',          label: 'Home',         emoji: '🏠', desc: 'Scan a receipt'     },
-  { href: '/inventory', label: 'Inventory',     emoji: '📦', desc: 'Your food & items'  },
-  { href: '/spend',     label: 'Spend History', emoji: '💳', desc: 'Track your spending' },
-  { href: '/insights',  label: 'Insights',      emoji: '📊', desc: 'Waste analytics'    },
-  { href: '/settings',  label: 'Settings',      emoji: '⚙️', desc: 'App preferences'    },
+  { href: '/add',       label: 'Add Item',      emoji: '➕', desc: 'Manual, voice or barcode' },
+  { href: '/',          label: 'Scan Receipt',  emoji: '📷', desc: 'Scan a grocery receipt'   },
+  { href: '/inventory', label: 'Inventory',     emoji: '📦', desc: 'Your food & items'        },
+  { href: '/spend',     label: 'Spend History', emoji: '💳', desc: 'Track your spending'      },
+  { href: '/insights',  label: 'Insights',      emoji: '📊', desc: 'Waste analytics'          },
+  { href: '/settings',  label: 'Settings',      emoji: '⚙️', desc: 'App preferences'          },
 ]
 
 export default function HamburgerMenu() {

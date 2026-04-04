@@ -149,11 +149,14 @@ export default function Home() {
       selected.map((item, i) => ({
         name: item.normalized_name,
         quantity: item.quantity,
+        quantity_original: item.quantity,
         unit: item.unit,
         location: item.location,
         category: item.category || null,
         expiry_date: item.expiry_date || null,
         receipt_item_id: receiptItems?.[i]?.id || null,
+        retailer: retailer || null,
+        source: 'receipt',
         status: 'active',
         user_id: userId,
       }))
