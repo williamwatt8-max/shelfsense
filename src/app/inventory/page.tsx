@@ -6,8 +6,10 @@ import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
 
-// ── Extended type: InventoryItem + price from receipt_items join ──────────────
-type InventoryItemWithPrice = InventoryItem & { price: number | null }
+// ── Extended type: InventoryItem + join-sourced fields ────────────────────────
+// retailer is not a DB column on inventory_items — it is populated via the
+// receipt_items → receipts join in loadItems() and lives only here.
+type InventoryItemWithPrice = InventoryItem & { price: number | null; retailer: string | null }
 
 type GroupedItem = {
   name: string
@@ -747,20 +749,17 @@ export default function InventoryPage() {
           })}
         </div>
 
-        {/* ── Retailer filter pills ── */}
+        {/* ── Retailer filter dropdown ── */}
         {retailers.length > 0 && (
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc' }}>🏪</span>
-            {retailerFilter && (
-              <button onClick={() => setRetailerFilter(null)} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: '#f5f5f5', color: '#aaa' }}>
-                All stores
-              </button>
-            )}
-            {retailers.map(r => (
-              <button key={r} onClick={() => setRetailerFilter(retailerFilter === r ? null : r)} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: retailerFilter === r ? 'rgba(255,112,67,0.15)' : 'white', color: retailerFilter === r ? '#ff7043' : '#888', boxShadow: '0 2px 6px rgba(0,0,0,0.07)' }}>
-                {r}
-              </button>
-            ))}
+          <div style={{ marginBottom: '12px' }}>
+            <select
+              value={retailerFilter || ''}
+              onChange={e => setRetailerFilter(e.target.value || null)}
+              style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: retailerFilter ? '#ff7043' : '#888', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', width: '100%', maxWidth: '280px' }}
+            >
+              <option value="">🏪 All Stores</option>
+              {retailers.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
           </div>
         )}
 

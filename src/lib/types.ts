@@ -32,11 +32,10 @@ quantity: number
 unit: string
 location: StorageLocation
 category: string | null
-purchase_date: string
+purchase_date?: string | null
 expiry_date: string | null
 opened_at: string | null
 opened_expiry_days: number | null
-retailer: string | null
 status: InventoryStatus
 created_at: string
 updated_at: string

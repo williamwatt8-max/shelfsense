@@ -10,7 +10,7 @@ type InsightItem = {
   status: string
   quantity: number
   unit: string
-  purchase_date: string
+  created_at: string
   receipt_item_id: string | null
   price: number | null
 }
@@ -36,10 +36,10 @@ export default function InsightsPage() {
       if (!userId) { setLoading(false); return }
       const { data, error } = await supabase
         .from('inventory_items')
-        .select('id, name, category, status, quantity, unit, purchase_date, receipt_item_id, receipt_items(price)')
+        .select('id, name, category, status, quantity, unit, created_at, receipt_item_id, receipt_items(price)')
         .eq('user_id', userId)
         .in('status', ['used', 'discarded', 'expired'])
-        .order('purchase_date', { ascending: false })
+        .order('created_at', { ascending: false })
       if (error) { alert('Error: ' + error.message); setLoading(false); return }
       const mapped = (data || []).map((item: any) => ({
         ...item,
@@ -51,11 +51,11 @@ export default function InsightsPage() {
     load()
   }, [])
 
-  const months = ['all', ...Array.from(new Set(items.map(i => i.purchase_date?.slice(0, 7)).filter(Boolean))).sort().reverse()]
+  const months = ['all', ...Array.from(new Set(items.map(i => i.created_at?.slice(0, 7)).filter(Boolean))).sort().reverse()]
 
   const filtered = items.filter(i => {
     if (monthFilter === 'all') return true
-    return i.purchase_date?.slice(0, 7) === monthFilter
+    return i.created_at?.slice(0, 7) === monthFilter
   })
 
   const used = filtered.filter(i => i.status === 'used')
