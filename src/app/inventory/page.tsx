@@ -22,7 +22,20 @@ type GroupedItem = {
 
 type UsingItemState  = { id: string; used: number; unit: string; maxQty: number }
 type OpeningItemState = { id: string; name: string; category: string | null; suggestedExpiry: string; rangeText: string; hasShelfLife: boolean }
-type EditingItemState = { id: string; quantity: number; unit: string; expiry_date: string; location: string }
+type EditingItemState = {
+  id: string
+  name: string
+  category: string
+  location: string
+  itemCount: string
+  amount_per_unit: string
+  quantity: string
+  unit: string
+  expiry_date: string
+  opened_at: string
+  retailer: string
+  status: string
+}
 type VoiceAction = {
   matched_item: string | null
   action: 'used_all' | 'used_partial' | 'discard' | 'set_expiry' | 'mark_opened' | null
@@ -166,9 +179,17 @@ export default function InventoryPage() {
   async function saveEdit() {
     if (!editingItem) return
     await supabase.from('inventory_items').update({
-      quantity: editingItem.quantity,
+      name: editingItem.name.trim(),
+      category: editingItem.category || null,
+      location: editingItem.location,
+      count: editingItem.itemCount ? parseInt(editingItem.itemCount) : null,
+      amount_per_unit: editingItem.amount_per_unit ? parseFloat(editingItem.amount_per_unit) : null,
+      quantity: parseFloat(editingItem.quantity) || 0,
       unit: editingItem.unit,
       expiry_date: editingItem.expiry_date || null,
+      opened_at: editingItem.opened_at || null,
+      retailer: editingItem.retailer.trim() || null,
+      status: editingItem.status,
     }).eq('id', editingItem.id)
     setEditingItem(null)
     loadItems()
@@ -474,6 +495,26 @@ export default function InventoryPage() {
   const filters = ['all', 'fridge', 'freezer', 'cupboard', 'household', 'expiring', 'expired']
   const units   = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
   const btnBase: React.CSSProperties = { border: 'none', borderRadius: '50px', padding: '7px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', cursor: 'pointer' }
+  const categories = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
+  const locationOptions = [
+    { value: 'fridge',    label: '❄️ Fridge'    },
+    { value: 'freezer',   label: '🧊 Freezer'   },
+    { value: 'cupboard',  label: '🗄️ Cupboard'  },
+    { value: 'household', label: '🏠 Household' },
+    { value: 'other',     label: '📦 Other'     },
+  ]
+  const editLabelStyle: React.CSSProperties = {
+    fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px',
+    color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px', display: 'block',
+  }
+  const editInputStyle: React.CSSProperties = {
+    width: '100%', border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px',
+    fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', boxSizing: 'border-box',
+  }
+  const editSelectStyle: React.CSSProperties = {
+    width: '100%', border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px',
+    fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px',
+  }
 
   // ── Sub-panels ────────────────────────────────────────────────────────────
 
@@ -549,7 +590,24 @@ export default function InventoryPage() {
           <button onClick={() => { startOpening(item); setEditingItem(null) }} style={{ ...btnBase, background: '#fff3e0', color: '#e65100' }}>📦 Mark opened</button>
         )}
         <button onClick={() => markDiscarded(item.id)} style={{ ...btnBase, background: '#fff0f0', color: '#ff4444' }}>🗑️ Discard</button>
-        <button onClick={() => { setEditingItem({ id: item.id, quantity: item.quantity, unit: item.unit, expiry_date: item.expiry_date || '', location: item.location }); setUsingItem(null); setOpeningItem(null) }} style={{ ...btnBase, background: '#fff8f0', color: '#ff7043' }}>✏️ Edit</button>
+        <button onClick={() => {
+          setEditingItem({
+            id: item.id,
+            name: item.name,
+            category: item.category || '',
+            location: item.location,
+            itemCount: String(item.count ?? 1),
+            amount_per_unit: item.amount_per_unit != null ? String(item.amount_per_unit) : '',
+            quantity: String(item.quantity),
+            unit: item.unit,
+            expiry_date: item.expiry_date || '',
+            opened_at: item.opened_at || '',
+            retailer: item.retailer || '',
+            status: item.status,
+          })
+          setUsingItem(null)
+          setOpeningItem(null)
+        }} style={{ ...btnBase, background: '#fff8f0', color: '#ff7043' }}>✏️ Edit</button>
         <select value={item.location} onChange={(e) => changeLocation(item.id, e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>
           <option value="fridge">Fridge</option>
           <option value="freezer">Freezer</option>
@@ -562,20 +620,93 @@ export default function InventoryPage() {
   }
 
   const editForm = () => editingItem && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '12px', padding: '12px', background: 'white', borderRadius: '10px' }}>
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-        <label style={{ color: '#aaa', fontSize: '12px', fontWeight: 700, fontFamily: "'Nunito',sans-serif", width: '60px' }}>Qty</label>
-        <input type="number" value={editingItem.quantity} onChange={e => setEditingItem({ ...editingItem, quantity: Number(e.target.value) })} style={{ width: '70px', border: '2px solid #eee', borderRadius: '8px', padding: '6px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }} />
-        <select value={editingItem.unit} onChange={e => setEditingItem({ ...editingItem, unit: e.target.value })} style={{ border: '2px solid #eee', borderRadius: '8px', padding: '6px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }}>
-          {units.map(u => <option key={u} value={u}>{u}</option>)}
-        </select>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '12px', padding: '14px', background: 'white', borderRadius: '12px', border: '1.5px solid rgba(255,112,67,0.15)' }}>
+      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff7043', margin: 0 }}>Edit Item</p>
+
+      {/* Name */}
+      <div>
+        <label style={editLabelStyle}>Name</label>
+        <input type="text" value={editingItem.name} onChange={e => setEditingItem({ ...editingItem, name: e.target.value })} style={editInputStyle} />
       </div>
+
+      {/* Category + Location */}
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ flex: 1 }}>
+          <label style={editLabelStyle}>Category</label>
+          <select value={editingItem.category} onChange={e => setEditingItem({ ...editingItem, category: e.target.value })} style={editSelectStyle}>
+            <option value="">— none —</option>
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={editLabelStyle}>Location</label>
+          <select value={editingItem.location} onChange={e => setEditingItem({ ...editingItem, location: e.target.value })} style={editSelectStyle}>
+            {locationOptions.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Purchase structure: count × size each + unit */}
+      <div>
+        <label style={editLabelStyle}>Purchase structure</label>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ ...editLabelStyle, fontSize: '10px' }}>Count</label>
+            <input type="number" min={1} step={1} placeholder="1" value={editingItem.itemCount} onChange={e => setEditingItem({ ...editingItem, itemCount: e.target.value })} style={{ ...editInputStyle, textAlign: 'center' }} />
+          </div>
+          <span style={{ color: '#ccc', fontWeight: 700, fontSize: '16px', paddingBottom: '9px', flexShrink: 0 }}>×</span>
+          <div style={{ flex: 1 }}>
+            <label style={{ ...editLabelStyle, fontSize: '10px' }}>Size each</label>
+            <input type="number" min={0} step={0.1} placeholder="—" value={editingItem.amount_per_unit} onChange={e => setEditingItem({ ...editingItem, amount_per_unit: e.target.value })} style={{ ...editInputStyle, textAlign: 'center' }} />
+          </div>
+          <div style={{ flex: 2 }}>
+            <label style={{ ...editLabelStyle, fontSize: '10px' }}>Unit</label>
+            <select value={editingItem.unit} onChange={e => setEditingItem({ ...editingItem, unit: e.target.value })} style={editSelectStyle}>
+              {units.map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Current remaining */}
+      <div>
+        <label style={editLabelStyle}>Currently remaining</label>
+        <input type="number" min={0} step={0.1} value={editingItem.quantity} onChange={e => setEditingItem({ ...editingItem, quantity: e.target.value })} style={{ ...editInputStyle, maxWidth: '120px' }} />
+      </div>
+
+      {/* Expiry (hide for household) */}
       {editingItem.location !== 'household' && (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <label style={{ color: '#aaa', fontSize: '12px', fontWeight: 700, fontFamily: "'Nunito',sans-serif", width: '60px' }}>Expiry</label>
-          <input type="date" value={editingItem.expiry_date || ''} onChange={e => setEditingItem({ ...editingItem, expiry_date: e.target.value })} style={{ border: '2px solid #eee', borderRadius: '8px', padding: '6px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }} />
+        <div>
+          <label style={editLabelStyle}>Expiry date</label>
+          <input type="date" value={editingItem.expiry_date} onChange={e => setEditingItem({ ...editingItem, expiry_date: e.target.value })} style={{ ...editInputStyle, maxWidth: '200px' }} />
         </div>
       )}
+
+      {/* Opened date */}
+      <div>
+        <label style={editLabelStyle}>Opened date</label>
+        <input type="date" value={editingItem.opened_at} onChange={e => setEditingItem({ ...editingItem, opened_at: e.target.value })} style={{ ...editInputStyle, maxWidth: '200px' }} />
+      </div>
+
+      {/* Retailer */}
+      <div>
+        <label style={editLabelStyle}>Retailer</label>
+        <input type="text" placeholder="e.g. Tesco" value={editingItem.retailer} onChange={e => setEditingItem({ ...editingItem, retailer: e.target.value })} style={editInputStyle} />
+      </div>
+
+      {/* Status */}
+      <div>
+        <label style={editLabelStyle}>Status</label>
+        <select value={editingItem.status} onChange={e => setEditingItem({ ...editingItem, status: e.target.value })} style={{ ...editSelectStyle, maxWidth: '200px' }}>
+          <option value="active">Active</option>
+          <option value="used">Used</option>
+          <option value="discarded">Discarded</option>
+          <option value="expired">Expired</option>
+          <option value="removed">Removed</option>
+        </select>
+      </div>
+
+      {/* Buttons */}
       <div style={{ display: 'flex', gap: '8px' }}>
         <button onClick={saveEdit} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>Save</button>
         <button onClick={() => setEditingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
@@ -587,14 +718,28 @@ export default function InventoryPage() {
 
   type HeaderProps = {
     name: string; location: string; quantity: number; quantityOriginal?: number | null
+    itemCount?: number | null; amountPerUnit?: number | null
     unit: string; createdAt: string; openedAt: string | null; price: number | null
     retailer?: string | null; hasBatches?: boolean
   }
 
-  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => {
-    const qtyDisplay = quantityOriginal && quantityOriginal > quantity
-      ? `${quantity} of ${quantityOriginal} ${unit}`
-      : `${quantity} ${unit}`
+  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => {
+    const qtyDisplay = (() => {
+      if (itemCount && itemCount > 1 && amountPerUnit) {
+        const used = quantityOriginal != null && quantityOriginal > quantity
+        return used
+          ? `${quantity} of ${itemCount} × ${amountPerUnit} ${unit}`
+          : `${itemCount} × ${amountPerUnit} ${unit}`
+      }
+      if (amountPerUnit && (!itemCount || itemCount === 1)) {
+        return quantityOriginal && quantityOriginal > quantity
+          ? `${quantity} of ${quantityOriginal} × ${amountPerUnit} ${unit}`
+          : `${amountPerUnit} ${unit}`
+      }
+      return quantityOriginal && quantityOriginal > quantity
+        ? `${quantity} of ${quantityOriginal} ${unit}`
+        : `${quantity} ${unit}`
+    })()
     return (
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -862,7 +1007,7 @@ export default function InventoryPage() {
                     <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
-                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} />
+                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
@@ -919,7 +1064,7 @@ export default function InventoryPage() {
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
-                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} quantityOriginal={item.quantity_original} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}

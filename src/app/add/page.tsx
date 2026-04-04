@@ -10,6 +10,8 @@ type Mode = 'manual' | 'voice' | 'barcode'
 
 type ItemForm = {
   name: string
+  itemCount: string      // number of individual units (e.g. "6" for a 6-pack)
+  amountPerUnit: string  // size of each unit (e.g. "330" for 330ml cans)
   quantity: string
   quantityOriginal: string
   unit: string
@@ -33,7 +35,7 @@ const LOCATIONS: { value: StorageLocation; label: string }[] = [
 ]
 
 const blankForm = (): ItemForm => ({
-  name: '', quantity: '1', quantityOriginal: '1', unit: 'item',
+  name: '', itemCount: '1', amountPerUnit: '', quantity: '1', quantityOriginal: '1', unit: 'item',
   location: 'cupboard', category: '', expiryDate: '',
   retailer: '', purchaseDate: '', opened: false, openedAt: '',
 })
@@ -146,6 +148,8 @@ export default function AddPage() {
   function applyVoiceResult(r: any) {
     setForm({
       name: r.name || '',
+      itemCount: String(r.count ?? 1),
+      amountPerUnit: r.amount_per_unit != null ? String(r.amount_per_unit) : '',
       quantity: String(r.quantity ?? 1),
       quantityOriginal: String(r.quantity_original ?? r.quantity ?? 1),
       unit: r.unit || 'item',
@@ -222,6 +226,8 @@ export default function AddPage() {
         setForm(prev => ({
           ...prev,
           name: result.name,
+          itemCount: String(result.count ?? 1),
+          amountPerUnit: result.amount_per_unit != null ? String(result.amount_per_unit) : '',
           quantity: String(result.quantity ?? 1),
           quantityOriginal: String(result.quantity ?? 1),
           unit: result.unit || 'item',
@@ -246,8 +252,12 @@ export default function AddPage() {
     const userId = session?.user?.id ?? null
     const qty = parseFloat(form.quantity) || 1
     const qtyOriginal = parseFloat(form.quantityOriginal) || qty
+    const itemCount = parseInt(form.itemCount) || 1
+    const amountPerUnit = form.amountPerUnit ? parseFloat(form.amountPerUnit) : null
     const { error } = await supabase.from('inventory_items').insert({
       name: form.name.trim(),
+      count: itemCount > 1 ? itemCount : null,
+      amount_per_unit: amountPerUnit,
       quantity: qty,
       quantity_original: qtyOriginal,
       unit: form.unit,
@@ -487,25 +497,39 @@ export default function AddPage() {
             />
           </div>
 
-          {/* Quantity + unit */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-            <div style={{ flex: 2 }}>
-              <label style={labelStyle}>Quantity</label>
-              <input
-                type="number"
-                min={0}
-                step={0.1}
-                value={form.quantity}
-                onChange={e => updateForm({ quantity: e.target.value })}
-                style={inputStyle}
-              />
+          {/* Quantity structure: count × size each + unit */}
+          <div style={{ marginBottom: '14px' }}>
+            <label style={labelStyle}>Quantity</label>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Count</label>
+                <input
+                  type="number" min={1} step={1} placeholder="1"
+                  value={form.itemCount}
+                  onChange={e => updateForm({ itemCount: e.target.value, quantity: e.target.value, quantityOriginal: e.target.value })}
+                  style={{ ...inputStyle, textAlign: 'center' }}
+                />
+              </div>
+              <span style={{ color: '#ccc', fontWeight: 700, fontSize: '18px', paddingBottom: '11px', flexShrink: 0 }}>×</span>
+              <div style={{ flex: 1 }}>
+                <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Size each</label>
+                <input
+                  type="number" min={0} step={0.1} placeholder="—"
+                  value={form.amountPerUnit}
+                  onChange={e => updateForm({ amountPerUnit: e.target.value })}
+                  style={{ ...inputStyle, textAlign: 'center' }}
+                />
+              </div>
+              <div style={{ flex: 2 }}>
+                <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Unit</label>
+                <select value={form.unit} onChange={e => updateForm({ unit: e.target.value })} style={selectStyle}>
+                  {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
             </div>
-            <div style={{ flex: 3 }}>
-              <label style={labelStyle}>Unit</label>
-              <select value={form.unit} onChange={e => updateForm({ unit: e.target.value })} style={selectStyle}>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
+            <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#ccc', margin: '4px 0 0' }}>
+              e.g. 6 × 330 ml cans, or just 1 × 750 ml bottle
+            </p>
           </div>
 
           {/* Location */}

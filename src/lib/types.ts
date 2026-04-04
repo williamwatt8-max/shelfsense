@@ -37,6 +37,9 @@ export type InventoryItem = {
   // quantity = current remaining; quantity_original = amount at first save
   quantity: number
   quantity_original: number | null
+  // count = number of individual units (e.g. 6 cans); amount_per_unit = size of each (e.g. 330 ml)
+  count: number | null
+  amount_per_unit: number | null
   unit: string
   location: StorageLocation
   category: string | null
