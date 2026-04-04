@@ -1,17 +1,19 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { suggestLocation } from '@/lib/categoriser'
 import { StorageLocation } from '@/lib/types'
 
-type Mode = 'manual' | 'voice' | 'barcode'
+type Mode        = 'manual' | 'voice' | 'barcode'
+type BarcodePhase = 'idle' | 'scanning' | 'reviewing' | 'saved'
+
+// ── Single-item form (manual / voice modes) ──────────────────────────────────
 
 type ItemForm = {
   name: string
-  itemCount: string      // number of individual units (e.g. "6" for a 6-pack)
-  amountPerUnit: string  // size of each unit (e.g. "330" for 330ml cans)
+  itemCount: string
+  amountPerUnit: string
   quantity: string
   quantityOriginal: string
   unit: string
@@ -24,14 +26,32 @@ type ItemForm = {
   openedAt: string
 }
 
-const UNITS = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
+// ── Batch item (barcode mode) ────────────────────────────────────────────────
+
+type BatchItem = {
+  id: string
+  barcode: string
+  name: string
+  count: string
+  amountPerUnit: string
+  unit: string
+  location: StorageLocation
+  category: string
+  expiryDate: string
+  price: number | null
+  lookupStatus: 'loading' | 'found' | 'not_found' | 'error'
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const UNITS      = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
 const CATEGORIES = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
 const LOCATIONS: { value: StorageLocation; label: string }[] = [
-  { value: 'fridge',     label: '❄️ Fridge'     },
-  { value: 'freezer',    label: '🧊 Freezer'    },
-  { value: 'cupboard',   label: '🗄️ Cupboard'   },
-  { value: 'household',  label: '🏠 Household'  },
-  { value: 'other',      label: '📦 Other'      },
+  { value: 'fridge',    label: '❄️ Fridge'    },
+  { value: 'freezer',   label: '🧊 Freezer'   },
+  { value: 'cupboard',  label: '🗄️ Cupboard'  },
+  { value: 'household', label: '🏠 Household' },
+  { value: 'other',     label: '📦 Other'     },
 ]
 
 const blankForm = (): ItemForm => ({
@@ -40,71 +60,85 @@ const blankForm = (): ItemForm => ({
   retailer: '', purchaseDate: '', opened: false, openedAt: '',
 })
 
+// ── Page component ────────────────────────────────────────────────────────────
+
 export default function AddPage() {
-  const router = useRouter()
+  // ── Mode / global ────────────────────────────────────────────────────────
   const [mode, setMode] = useState<Mode>('manual')
-  const [form, setForm] = useState<ItemForm>(blankForm())
+
+  // ── Single-item state (manual + voice) ───────────────────────────────────
+  const [form, setForm]     = useState<ItemForm>(blankForm())
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [saved, setSaved]   = useState(false)
 
   // Voice state
-  const [voiceListening, setVoiceListening] = useState(false)
-  const [voiceProcessing, setVoiceProcessing] = useState(false)
-  const [voiceTranscript, setVoiceTranscript] = useState('')
-  const [voiceError, setVoiceError] = useState<string | null>(null)
-  const [voiceFilled, setVoiceFilled] = useState(false)
+  const [voiceListening,   setVoiceListening]   = useState(false)
+  const [voiceProcessing,  setVoiceProcessing]  = useState(false)
+  const [voiceTranscript,  setVoiceTranscript]  = useState('')
+  const [voiceError,       setVoiceError]       = useState<string | null>(null)
+  const [voiceFilled,      setVoiceFilled]      = useState(false)
 
-  // Barcode state
-  const [barcodeInput, setBarcodeInput] = useState('')
-  const [barcodeSearching, setBarcodeSearching] = useState(false)
-  const [barcodeError, setBarcodeError] = useState<string | null>(null)
-  const [barcodeFound, setBarcodeFound] = useState<string | null>(null)
-  const [cameraActive, setCameraActive] = useState(false)
-  const [cameraSupported, setCameraSupported] = useState<boolean | null>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const photoInputRef = useRef<HTMLInputElement>(null)
+  // ── Barcode batch state ───────────────────────────────────────────────────
+  const [barcodePhase,      setBarcodePhase]     = useState<BarcodePhase>('idle')
+  const [batchItems,        setBatchItems]       = useState<BatchItem[]>([])
+  const [cameraSupported,   setCameraSupported]  = useState<boolean | null>(null)
+  const [cameraActive,      setCameraActive]     = useState(false)
+  const [scanFlash,         setScanFlash]        = useState(false)
+  const [batchSaving,       setBatchSaving]      = useState(false)
+  const [photoScanning,     setPhotoScanning]    = useState(false) // iOS fallback
+
+  // Camera refs
+  const videoRef         = useRef<HTMLVideoElement>(null)
+  const streamRef        = useRef<MediaStream | null>(null)
+  const scanIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  const photoInputRef    = useRef<HTMLInputElement>(null)
+
+  // Scan debounce refs (avoid re-scanning same barcode instantly)
+  const lastBarcodeRef   = useRef('')
+  const lastScanTimeRef  = useRef(0)
 
   useEffect(() => {
-    // Check BarcodeDetector support
     setCameraSupported(typeof window !== 'undefined' && 'BarcodeDetector' in window)
     return () => stopCamera()
   }, [])
+
+  // ── Mode switch ───────────────────────────────────────────────────────────
+
+  function switchMode(m: Mode) {
+    if (m !== 'barcode') {
+      stopCamera()
+      setBarcodePhase('idle')
+      setBatchItems([])
+    }
+    setMode(m)
+    setVoiceError(null)
+  }
+
+  // ── Form helpers (manual / voice) ─────────────────────────────────────────
 
   function updateForm(patch: Partial<ItemForm>) {
     setForm(prev => ({ ...prev, ...patch }))
   }
 
   function autoFillLocation(name: string, category: string) {
-    const loc = suggestLocation(name, category)
-    updateForm({ location: loc })
+    updateForm({ location: suggestLocation(name, category) })
   }
 
   // ── Voice add ──────────────────────────────────────────────────────────────
 
   function startVoice() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SR) {
-      setVoiceError("Voice input isn't supported in this browser. Try Chrome.")
-      return
-    }
+    if (!SR) { setVoiceError("Voice input isn't supported in this browser. Try Chrome."); return }
     const recognition = new SR()
     recognition.lang = 'en-GB'
     recognition.continuous = true
     recognition.interimResults = true
     recognition.maxAlternatives = 1
-
     let finalTranscript = ''
     let silenceTimer: ReturnType<typeof setTimeout> | null = null
     const absoluteTimer = setTimeout(() => recognition.stop(), 10000)
-
-    setVoiceListening(true)
-    setVoiceError(null)
-    setVoiceFilled(false)
-    setVoiceTranscript('')
+    setVoiceListening(true); setVoiceError(null); setVoiceFilled(false); setVoiceTranscript('')
     recognition.start()
-
     recognition.onresult = (e: any) => {
       if (silenceTimer) clearTimeout(silenceTimer)
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -113,162 +147,37 @@ export default function AddPage() {
       setVoiceTranscript(finalTranscript.trim())
       silenceTimer = setTimeout(() => recognition.stop(), 2500)
     }
-
     recognition.onerror = (e: any) => {
       if (e.error !== 'no-speech') {
-        clearTimeout(absoluteTimer)
-        if (silenceTimer) clearTimeout(silenceTimer)
-        setVoiceListening(false)
-        setVoiceError("Couldn't hear you — try again.")
+        clearTimeout(absoluteTimer); if (silenceTimer) clearTimeout(silenceTimer)
+        setVoiceListening(false); setVoiceError("Couldn't hear you — try again.")
       }
     }
-
     recognition.onend = async () => {
-      clearTimeout(absoluteTimer)
-      if (silenceTimer) clearTimeout(silenceTimer)
+      clearTimeout(absoluteTimer); if (silenceTimer) clearTimeout(silenceTimer)
       setVoiceListening(false)
       const transcript = finalTranscript.trim()
       if (!transcript) { setVoiceError('No speech detected — tap the mic and try again.'); return }
       setVoiceProcessing(true)
       try {
-        const res = await fetch('/api/voice-add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transcript }),
+        const res = await fetch('/api/voice-add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript }) })
+        const r = await res.json()
+        if (r.error) throw new Error(r.error)
+        setForm({
+          name: r.name || '', itemCount: String(r.count ?? 1),
+          amountPerUnit: r.amount_per_unit != null ? String(r.amount_per_unit) : '',
+          quantity: String(r.quantity ?? 1), quantityOriginal: String(r.quantity_original ?? r.quantity ?? 1),
+          unit: r.unit || 'item', location: (r.location as StorageLocation) || suggestLocation(r.name || '', r.category || ''),
+          category: r.category || '', expiryDate: r.expiry_date || '', retailer: r.retailer || '',
+          purchaseDate: '', opened: !!r.opened_at, openedAt: r.opened_at || '',
         })
-        const result = await res.json()
-        if (result.error) throw new Error(result.error)
-        applyVoiceResult(result)
-      } catch {
-        setVoiceError('Could not understand — try speaking more clearly.')
-      }
+        setVoiceFilled(true)
+      } catch { setVoiceError('Could not understand — try speaking more clearly.') }
       setVoiceProcessing(false)
     }
   }
 
-  function applyVoiceResult(r: any) {
-    setForm({
-      name: r.name || '',
-      itemCount: String(r.count ?? 1),
-      amountPerUnit: r.amount_per_unit != null ? String(r.amount_per_unit) : '',
-      quantity: String(r.quantity ?? 1),
-      quantityOriginal: String(r.quantity_original ?? r.quantity ?? 1),
-      unit: r.unit || 'item',
-      location: (r.location as StorageLocation) || suggestLocation(r.name || '', r.category || ''),
-      category: r.category || '',
-      expiryDate: r.expiry_date || '',
-      retailer: r.retailer || '',
-      purchaseDate: '',
-      opened: !!r.opened_at,
-      openedAt: r.opened_at || '',
-    })
-    setVoiceFilled(true)
-  }
-
-  // ── Barcode ────────────────────────────────────────────────────────────────
-
-  async function startCamera() {
-    const BarcodeDetector = (window as any).BarcodeDetector
-    if (!BarcodeDetector || !navigator.mediaDevices?.getUserMedia) {
-      setCameraSupported(false)
-      return
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-      streamRef.current = stream
-      setCameraActive(true)
-      setBarcodeError(null)
-      // Give video element time to mount
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-          videoRef.current.play().catch(() => {})
-        }
-      }, 100)
-      const detector = new BarcodeDetector({
-        formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'],
-      })
-      scanIntervalRef.current = setInterval(async () => {
-        if (!videoRef.current || videoRef.current.readyState < 2) return
-        try {
-          const barcodes = await detector.detect(videoRef.current)
-          if (barcodes.length > 0) {
-            stopCamera()
-            lookupBarcode(barcodes[0].rawValue)
-          }
-        } catch {}
-      }, 600)
-    } catch {
-      setBarcodeError("Couldn't access camera — enter barcode manually below.")
-      setCameraActive(false)
-    }
-  }
-
-  function stopCamera() {
-    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
-    if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null }
-    setCameraActive(false)
-  }
-
-  // iOS / non-BarcodeDetector fallback: send photo to Claude vision to extract barcode digits
-  async function captureBarcode(file: File) {
-    setBarcodeSearching(true)
-    setBarcodeError(null)
-    setBarcodeFound(null)
-    try {
-      const fd = new FormData()
-      fd.append('image', file)
-      const res = await fetch('/api/barcode-image', { method: 'POST', body: fd })
-      const result = await res.json()
-      if (result.found && result.barcode) {
-        setBarcodeInput(result.barcode)
-        setBarcodeSearching(false)
-        lookupBarcode(result.barcode)
-      } else {
-        setBarcodeError("Couldn't read a barcode from the photo — try better lighting, or enter manually.")
-        setBarcodeSearching(false)
-      }
-    } catch {
-      setBarcodeError('Photo scan failed — enter barcode manually.')
-      setBarcodeSearching(false)
-    }
-  }
-
-  async function lookupBarcode(code: string) {
-    if (!code.trim()) return
-    setBarcodeSearching(true)
-    setBarcodeError(null)
-    setBarcodeFound(null)
-    try {
-      const res = await fetch('/api/barcode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode: code.trim() }),
-      })
-      const result = await res.json()
-      if (result.found && result.name) {
-        setBarcodeFound(result.name)
-        setForm(prev => ({
-          ...prev,
-          name: result.name,
-          itemCount: String(result.count ?? 1),
-          amountPerUnit: result.amount_per_unit != null ? String(result.amount_per_unit) : '',
-          quantity: String(result.quantity ?? 1),
-          quantityOriginal: String(result.quantity ?? 1),
-          unit: result.unit || 'item',
-          category: result.category || '',
-          location: suggestLocation(result.name, result.category || ''),
-        }))
-      } else {
-        setBarcodeError(`Barcode ${code} not found in product database — fill in details manually.`)
-      }
-    } catch {
-      setBarcodeError('Lookup failed — fill in details manually.')
-    }
-    setBarcodeSearching(false)
-  }
-
-  // ── Save ───────────────────────────────────────────────────────────────────
+  // ── Single-item save (manual / voice) ─────────────────────────────────────
 
   async function handleSave() {
     if (!form.name.trim()) return
@@ -276,15 +185,12 @@ export default function AddPage() {
     const { data: { session } } = await supabase.auth.getSession()
     const userId = session?.user?.id ?? null
     const qty = parseFloat(form.quantity) || 1
-    const qtyOriginal = parseFloat(form.quantityOriginal) || qty
-    const itemCount = parseInt(form.itemCount) || 1
-    const amountPerUnit = form.amountPerUnit ? parseFloat(form.amountPerUnit) : null
     const { error } = await supabase.from('inventory_items').insert({
       name: form.name.trim(),
-      count: itemCount > 1 ? itemCount : null,
-      amount_per_unit: amountPerUnit,
+      count: (parseInt(form.itemCount) || 1) > 1 ? parseInt(form.itemCount) : null,
+      amount_per_unit: form.amountPerUnit ? parseFloat(form.amountPerUnit) : null,
       quantity: qty,
-      quantity_original: qtyOriginal,
+      quantity_original: parseFloat(form.quantityOriginal) || qty,
       unit: form.unit,
       location: form.location,
       category: form.category || null,
@@ -303,13 +209,161 @@ export default function AddPage() {
   }
 
   function addAnother() {
-    setForm(blankForm())
-    setSaved(false)
-    setVoiceTranscript('')
-    setVoiceFilled(false)
-    setBarcodeInput('')
-    setBarcodeFound(null)
-    setBarcodeError(null)
+    setForm(blankForm()); setSaved(false); setVoiceTranscript(''); setVoiceFilled(false)
+  }
+
+  // ── Barcode — camera ───────────────────────────────────────────────────────
+
+  async function startCamera() {
+    const BarcodeDetector = (window as any).BarcodeDetector
+    if (!BarcodeDetector || !navigator.mediaDevices?.getUserMedia) { setCameraSupported(false); return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      streamRef.current = stream
+      setCameraActive(true)
+      setBarcodePhase('scanning')
+      setTimeout(() => {
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().catch(() => {}) }
+      }, 100)
+      const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] })
+      scanIntervalRef.current = setInterval(async () => {
+        if (!videoRef.current || videoRef.current.readyState < 2) return
+        try {
+          const codes = await detector.detect(videoRef.current)
+          if (codes.length > 0) addToBatch(codes[0].rawValue)
+        } catch {}
+      }, 500)
+    } catch {
+      alert("Couldn't access camera. Check camera permissions and try again.")
+      setCameraActive(false)
+    }
+  }
+
+  function stopCamera() {
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
+    if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null }
+    setCameraActive(false)
+  }
+
+  function finishScanning() {
+    stopCamera()
+    setBarcodePhase(batchItems.length > 0 ? 'reviewing' : 'idle')
+  }
+
+  // ── Barcode — iOS photo fallback ───────────────────────────────────────────
+
+  async function capturePhoto(file: File) {
+    setPhotoScanning(true)
+    try {
+      const fd = new FormData()
+      fd.append('image', file)
+      const res = await fetch('/api/barcode-image', { method: 'POST', body: fd })
+      const result = await res.json()
+      if (result.found && result.barcode) {
+        await addToBatch(result.barcode)
+        setBarcodePhase('scanning') // stay in "scanning" to allow more photos
+      } else {
+        alert("Couldn't read a barcode from the photo — try better lighting.")
+      }
+    } catch { alert('Photo scan failed — try again.') }
+    setPhotoScanning(false)
+  }
+
+  // ── Barcode — batch add / lookup ───────────────────────────────────────────
+
+  async function addToBatch(barcode: string) {
+    const now = Date.now()
+    // Debounce: ignore same barcode within 2s (camera will re-detect on every frame)
+    if (barcode === lastBarcodeRef.current && now - lastScanTimeRef.current < 2000) return
+    lastBarcodeRef.current = barcode
+    lastScanTimeRef.current = now
+
+    // Haptic feedback
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(80)
+    // Visual flash
+    setScanFlash(true); setTimeout(() => setScanFlash(false), 280)
+
+    // Duplicate barcode — just increment count
+    const existIdx = batchItems.findIndex(i => i.barcode === barcode)
+    if (existIdx !== -1) {
+      setBatchItems(prev => prev.map((item, i) =>
+        i === existIdx ? { ...item, count: String(parseInt(item.count) + 1) } : item
+      ))
+      return
+    }
+
+    // New barcode — add placeholder row, then look up in background
+    const id = `${barcode}-${now}`
+    const placeholder: BatchItem = {
+      id, barcode, name: barcode, count: '1', amountPerUnit: '', unit: 'item',
+      location: 'cupboard', category: '', expiryDate: '', price: null, lookupStatus: 'loading',
+    }
+    setBatchItems(prev => [...prev, placeholder])
+
+    try {
+      const res = await fetch('/api/barcode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode }),
+      })
+      const result = await res.json()
+      setBatchItems(prev => prev.map(item => {
+        if (item.id !== id) return item
+        if (result.found && result.name) {
+          const loc = suggestLocation(result.name, result.category || '')
+          return {
+            ...item,
+            name: result.name,
+            amountPerUnit: result.amount_per_unit != null ? String(result.amount_per_unit) : '',
+            unit: result.unit || 'item',
+            category: result.category || '',
+            location: loc,
+            lookupStatus: 'found',
+          }
+        }
+        return { ...item, lookupStatus: 'not_found' }
+      }))
+    } catch {
+      setBatchItems(prev => prev.map(item => item.id === id ? { ...item, lookupStatus: 'error' } : item))
+    }
+  }
+
+  function updateBatchItem(idx: number, patch: Partial<BatchItem>) {
+    setBatchItems(prev => prev.map((item, i) => i === idx ? { ...item, ...patch } : item))
+  }
+
+  function removeBatchItem(idx: number) {
+    setBatchItems(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  // ── Batch save ─────────────────────────────────────────────────────────────
+
+  async function saveBatch() {
+    if (batchItems.length === 0) return
+    setBatchSaving(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user?.id ?? null
+    const inserts = batchItems.map(item => {
+      const cnt = parseInt(item.count) || 1
+      return {
+        name: item.name.trim() || item.barcode,
+        quantity: cnt,
+        quantity_original: cnt,
+        count: cnt > 1 ? cnt : null,
+        amount_per_unit: item.amountPerUnit ? parseFloat(item.amountPerUnit) : null,
+        unit: item.unit,
+        location: item.location,
+        category: item.category || null,
+        expiry_date: item.expiryDate || null,
+        receipt_item_id: null,
+        source: 'barcode' as const,
+        status: 'active' as const,
+        user_id: userId,
+      }
+    })
+    const { error } = await supabase.from('inventory_items').insert(inserts)
+    setBatchSaving(false)
+    if (error) { alert('Error saving: ' + error.message); return }
+    setBarcodePhase('saved')
   }
 
   // ── Styles ─────────────────────────────────────────────────────────────────
@@ -328,15 +382,18 @@ export default function AddPage() {
   const selectStyle: React.CSSProperties = { ...inputStyle }
   const labelStyle: React.CSSProperties = {
     fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px',
-    color: '#aaa', marginBottom: '4px', display: 'block', textTransform: 'uppercase' as const,
-    letterSpacing: '0.5px',
+    color: '#aaa', marginBottom: '4px', display: 'block', textTransform: 'uppercase' as const, letterSpacing: '0.5px',
   }
   const btnBase: React.CSSProperties = {
     border: 'none', borderRadius: '50px', padding: '9px 18px',
     fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', cursor: 'pointer',
   }
+  const bfs: React.CSSProperties = {
+    border: '2px solid #eee', borderRadius: '8px', padding: '7px 8px',
+    fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: 'white',
+  }
 
-  // ── Done screen ────────────────────────────────────────────────────────────
+  // ── Done screen (single-item) ──────────────────────────────────────────────
 
   if (saved) {
     return (
@@ -357,13 +414,37 @@ export default function AddPage() {
     )
   }
 
+  // ── Batch saved screen ─────────────────────────────────────────────────────
+
+  if (mode === 'barcode' && barcodePhase === 'saved') {
+    return (
+      <main style={{ ...warmStyle, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');`}</style>
+        <div style={{ fontSize: '64px', marginBottom: '16px' }}>🎉</div>
+        <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '36px', color: '#2d2d2d', margin: '0 0 8px' }}>{batchItems.length} item{batchItems.length !== 1 ? 's' : ''} saved!</h1>
+        <p style={{ color: '#aaa', fontWeight: 700, fontSize: '15px', margin: '0 0 32px', textAlign: 'center' }}>Added to your inventory</p>
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button onClick={() => { setBarcodePhase('idle'); setBatchItems([]) }} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '12px 28px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)' }}>
+            Scan More
+          </button>
+          <a href="/inventory" style={{ ...btnBase, background: 'white', color: '#ff7043', fontSize: '16px', padding: '12px 28px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', textDecoration: 'none' }}>
+            View Inventory
+          </a>
+        </div>
+      </main>
+    )
+  }
+
   // ── Main render ────────────────────────────────────────────────────────────
 
   return (
     <main style={warmStyle}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
-        @keyframes voice-pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.12);opacity:0.85} }
+        @keyframes voice-pulse  { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.12);opacity:0.85} }
+        @keyframes scan-line    { 0%,100%{top:8%} 50%{top:82%} }
+        @keyframes scan-flash   { 0%{opacity:0.55} 100%{opacity:0} }
+        @keyframes scan-pop     { 0%{transform:scale(0.9);opacity:0} 60%{transform:scale(1.04)} 100%{transform:scale(1);opacity:1} }
       `}</style>
 
       <div style={{ maxWidth: '640px', margin: '0 auto' }}>
@@ -382,23 +463,209 @@ export default function AddPage() {
             { id: 'voice',   label: '🎤 Voice'   },
             { id: 'barcode', label: '📷 Barcode'  },
           ] as { id: Mode; label: string }[]).map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => { setMode(tab.id); setVoiceError(null); setBarcodeError(null) }}
-              style={{
-                ...btnBase, flex: 1,
-                background: mode === tab.id ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white',
-                color: mode === tab.id ? 'white' : '#888',
-                boxShadow: mode === tab.id ? '0 4px 12px rgba(255,112,67,0.35)' : '0 2px 8px rgba(0,0,0,0.07)',
-                fontSize: '13px', padding: '9px 10px',
-              }}
-            >
+            <button key={tab.id} onClick={() => switchMode(tab.id)} style={{ ...btnBase, flex: 1, background: mode === tab.id ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: mode === tab.id ? 'white' : '#888', boxShadow: mode === tab.id ? '0 4px 12px rgba(255,112,67,0.35)' : '0 2px 8px rgba(0,0,0,0.07)', fontSize: '13px', padding: '9px 10px' }}>
               {tab.label}
             </button>
           ))}
         </div>
 
-        {/* ── Voice tab controls ── */}
+        {/* ══════════════════════════════════════════════════════════════════
+            BARCODE BATCH SCANNING FLOW
+        ══════════════════════════════════════════════════════════════════ */}
+        {mode === 'barcode' && (
+          <>
+            {/* ── Phase: idle ── */}
+            {barcodePhase === 'idle' && (
+              <div style={{ background: 'white', borderRadius: '20px', padding: '28px 24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', textAlign: 'center' }}>
+                <div style={{ fontSize: '56px', marginBottom: '12px' }}>📦</div>
+                <h2 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '26px', color: '#2d2d2d', margin: '0 0 8px' }}>
+                  Scan Your Shopping
+                </h2>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#aaa', margin: '0 0 24px', lineHeight: 1.5 }}>
+                  Scan multiple barcodes in one session. Each item goes into a review list — edit and save together.
+                </p>
+
+                {cameraSupported === null && (
+                  <p style={{ color: '#ccc', fontWeight: 700, fontSize: '13px', fontFamily: "'Nunito',sans-serif" }}>Checking camera support...</p>
+                )}
+
+                {cameraSupported && (
+                  <button
+                    onClick={startCamera}
+                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '18px', padding: '16px 40px', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', fontFamily: "'Fredoka One',cursive", display: 'inline-flex', alignItems: 'center', gap: '10px' }}
+                  >
+                    <span style={{ fontSize: '24px' }}>📷</span> Start Scanning
+                  </button>
+                )}
+
+                {cameraSupported === false && (
+                  <>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 14px' }}>
+                      Live scanning not available on this device — take a photo of each barcode instead.
+                    </p>
+                    <label style={{ ...btnBase, background: photoScanning ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: photoScanning ? '#bbb' : 'white', fontSize: '16px', padding: '14px 32px', cursor: photoScanning ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '10px', boxShadow: photoScanning ? 'none' : '0 6px 20px rgba(255,112,67,0.35)', boxSizing: 'border-box' as const }}>
+                      <span style={{ fontSize: '22px' }}>📷</span>
+                      {photoScanning ? 'Reading...' : 'Take Photo of Barcode'}
+                      <input ref={photoInputRef} type="file" accept="image/*" capture="environment" disabled={photoScanning}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) capturePhoto(f); e.target.value = '' }}
+                        style={{ display: 'none' }} />
+                    </label>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── Phase: scanning ── */}
+            {barcodePhase === 'scanning' && (
+              <>
+                {/* Camera viewfinder */}
+                {cameraActive && (
+                  <div style={{ background: '#000', borderRadius: '16px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
+                    <video ref={videoRef} muted playsInline style={{ width: '100%', maxHeight: '280px', objectFit: 'cover', display: 'block' }} />
+                    {/* Animated scan line */}
+                    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+                      <div style={{ position: 'absolute', left: '8%', right: '8%', height: '2px', background: 'rgba(255,112,67,0.9)', animation: 'scan-line 2s ease-in-out infinite', boxShadow: '0 0 8px rgba(255,112,67,0.8)', borderRadius: '2px' }} />
+                    </div>
+                    {/* Corner brackets */}
+                    <div style={{ position: 'absolute', inset: '12px', pointerEvents: 'none', border: '2px solid rgba(255,112,67,0.4)', borderRadius: '10px' }} />
+                    {/* Flash overlay */}
+                    {scanFlash && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.7)', animation: 'scan-flash 0.28s ease-out forwards', borderRadius: '16px' }} />}
+                  </div>
+                )}
+
+                {/* iOS: photo scan when camera not available */}
+                {!cameraActive && cameraSupported === false && (
+                  <div style={{ background: 'white', borderRadius: '16px', padding: '20px', marginBottom: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', textAlign: 'center' }}>
+                    <label style={{ ...btnBase, background: photoScanning ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: photoScanning ? '#bbb' : 'white', fontSize: '16px', padding: '14px 28px', cursor: photoScanning ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '10px', boxShadow: photoScanning ? 'none' : '0 6px 20px rgba(255,112,67,0.35)', boxSizing: 'border-box' as const }}>
+                      <span style={{ fontSize: '22px' }}>📷</span>
+                      {photoScanning ? 'Reading barcode...' : 'Scan Another Barcode'}
+                      <input ref={photoInputRef} type="file" accept="image/*" capture="environment" disabled={photoScanning}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) capturePhoto(f); e.target.value = '' }}
+                        style={{ display: 'none' }} />
+                    </label>
+                  </div>
+                )}
+
+                {/* Scanned count header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '18px', color: '#2d2d2d' }}>
+                    {batchItems.length === 0 ? 'Point camera at a barcode' : `${batchItems.length} item${batchItems.length !== 1 ? 's' : ''} scanned`}
+                  </span>
+                  <button onClick={finishScanning} style={{ ...btnBase, background: batchItems.length > 0 ? 'linear-gradient(135deg,#4caf50,#66bb6a)' : '#f0f0f0', color: batchItems.length > 0 ? 'white' : '#aaa', padding: '8px 18px', boxShadow: batchItems.length > 0 ? '0 4px 12px rgba(76,175,80,0.35)' : 'none' }}>
+                    {batchItems.length > 0 ? '✓ Done scanning' : '← Back'}
+                  </button>
+                </div>
+
+                {/* Running batch list (compact) */}
+                {batchItems.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
+                    {batchItems.map((item) => (
+                      <div key={item.id} style={{ background: 'white', borderRadius: '12px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 1px 6px rgba(0,0,0,0.06)', animation: 'scan-pop 0.25s ease-out' }}>
+                        <span style={{ fontSize: '16px', flexShrink: 0 }}>
+                          {item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'found' ? '✅' : '⚠️'}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {item.lookupStatus === 'loading' ? 'Looking up...' : item.name}
+                          </p>
+                          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: 0 }}>
+                            {item.barcode}
+                          </p>
+                        </div>
+                        <span style={{ background: item.count !== '1' ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#f5f5f5', color: item.count !== '1' ? 'white' : '#888', fontFamily: "'Fredoka One',cursive", fontSize: '15px', borderRadius: '50px', minWidth: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 8px', flexShrink: 0 }}>
+                          ×{item.count}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── Phase: reviewing ── */}
+            {barcodePhase === 'reviewing' && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                  <div>
+                    <h2 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '26px', color: '#2d2d2d', margin: 0 }}>Review Batch</h2>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: 0 }}>
+                      {batchItems.length} item{batchItems.length !== 1 ? 's' : ''} — edit then save
+                    </p>
+                  </div>
+                  <button onClick={() => { setBarcodePhase('idle'); startCamera() }} style={{ ...btnBase, background: '#f5f5f5', color: '#888', padding: '8px 16px', fontSize: '13px' }}>
+                    + Scan more
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+                  {batchItems.map((item, i) => (
+                    <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: item.lookupStatus === 'not_found' || item.lookupStatus === 'error' ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent' }}>
+
+                      {/* Row 1: status icon + name + remove */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                        <span style={{ fontSize: '15px', flexShrink: 0 }}>
+                          {item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'found' ? '✅' : '⚠️'}
+                        </span>
+                        <input
+                          type="text"
+                          value={item.name}
+                          placeholder={item.barcode}
+                          onChange={e => updateBatchItem(i, { name: e.target.value })}
+                          style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', minWidth: 0 }}
+                        />
+                        <button onClick={() => removeBatchItem(i)} style={{ background: 'none', border: 'none', color: '#ddd', fontSize: '16px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }}>✕</button>
+                      </div>
+
+                      {/* Row 2: count × amount + unit + price */}
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <input type="number" min={1} step={1} value={item.count} onChange={e => updateBatchItem(i, { count: e.target.value })} style={{ ...bfs, width: '52px', textAlign: 'center' }} title="Count" />
+                          <span style={{ color: '#ccc', fontWeight: 700, fontSize: '14px' }}>×</span>
+                          <input type="number" min={0} step={0.1} value={item.amountPerUnit} placeholder="amt" onChange={e => updateBatchItem(i, { amountPerUnit: e.target.value })} style={{ ...bfs, width: '60px', textAlign: 'center' }} title="Amount per unit" />
+                        </div>
+                        <select value={item.unit} onChange={e => updateBatchItem(i, { unit: e.target.value })} style={bfs}>
+                          {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: 'auto' }}>
+                          <span style={{ color: '#bbb', fontWeight: 700, fontSize: '13px', fontFamily: "'Nunito',sans-serif" }}>£</span>
+                          <input type="number" min={0} step={0.01} value={item.price ?? ''} placeholder="—" onChange={e => updateBatchItem(i, { price: e.target.value !== '' ? Number(e.target.value) : null })} style={{ ...bfs, width: '68px', textAlign: 'right', color: '#ff7043' }} />
+                        </div>
+                      </div>
+
+                      {/* Row 3: location + category */}
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: item.location !== 'household' ? '8px' : '0' }}>
+                        <select value={item.location} onChange={e => updateBatchItem(i, { location: e.target.value as StorageLocation })} style={{ ...bfs, flex: 1 }}>
+                          {LOCATIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                        </select>
+                        <select value={item.category} onChange={e => updateBatchItem(i, { category: e.target.value })} style={{ ...bfs, flex: 1 }}>
+                          <option value="">— category —</option>
+                          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Row 4: expiry */}
+                      {item.location !== 'household' && (
+                        <input type="date" value={item.expiryDate} onChange={e => updateBatchItem(i, { expiryDate: e.target.value })} style={{ ...bfs, color: item.expiryDate ? '#2d2d2d' : '#bbb' }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={saveBatch}
+                  disabled={batchSaving || batchItems.length === 0}
+                  style={{ ...btnBase, width: '100%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '18px', padding: '16px', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', fontFamily: "'Fredoka One',cursive", opacity: batchSaving ? 0.7 : 1 }}
+                >
+                  {batchSaving ? 'Saving...' : `Save ${batchItems.length} item${batchItems.length !== 1 ? 's' : ''} to Inventory`}
+                </button>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════
+            VOICE TAB CONTROLS
+        ══════════════════════════════════════════════════════════════════ */}
         {mode === 'voice' && (
           <div style={{ background: 'white', borderRadius: '16px', padding: '20px', marginBottom: '16px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
             <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: '0 0 12px' }}>
@@ -407,13 +674,7 @@ export default function AddPage() {
             <button
               onClick={startVoice}
               disabled={voiceListening || voiceProcessing}
-              style={{
-                ...btnBase, width: '100%', justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '10px',
-                background: voiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)',
-                color: 'white', fontSize: '16px', padding: '14px',
-                boxShadow: voiceListening ? '0 6px 20px rgba(255,68,68,0.4)' : '0 6px 20px rgba(255,112,67,0.35)',
-                opacity: voiceProcessing ? 0.7 : 1,
-              }}
+              style={{ ...btnBase, width: '100%', justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '10px', background: voiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px', boxShadow: voiceListening ? '0 6px 20px rgba(255,68,68,0.4)' : '0 6px 20px rgba(255,112,67,0.35)', opacity: voiceProcessing ? 0.7 : 1 }}
             >
               <span style={{ fontSize: '22px', animation: voiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
               {voiceListening ? 'Listening...' : voiceProcessing ? 'Understanding...' : 'Tap to speak'}
@@ -424,249 +685,114 @@ export default function AddPage() {
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
               </div>
             )}
-            {voiceFilled && (
-              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#4caf50', margin: '10px 0 0' }}>
-                ✅ Fields filled in below — review and save
-              </p>
-            )}
-            {voiceError && (
-              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '10px 0 0' }}>
-                😕 {voiceError}
-              </p>
-            )}
+            {voiceFilled && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#4caf50', margin: '10px 0 0' }}>✅ Fields filled in below — review and save</p>}
+            {voiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '10px 0 0' }}>😕 {voiceError}</p>}
           </div>
         )}
 
-        {/* ── Barcode tab controls ── */}
-        {mode === 'barcode' && (
-          <div style={{ background: 'white', borderRadius: '16px', padding: '20px', marginBottom: '16px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
-            {cameraActive ? (
-              <div>
-                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043', margin: '0 0 10px' }}>
-                  🔍 Scanning — hold barcode steady...
-                </p>
-                <video
-                  ref={videoRef}
-                  muted
-                  playsInline
-                  style={{ width: '100%', borderRadius: '12px', background: '#000', maxHeight: '220px', objectFit: 'cover' }}
-                />
-                <button onClick={stopCamera} style={{ ...btnBase, background: '#f5f5f5', color: '#888', marginTop: '10px', width: '100%' }}>
-                  ✕ Cancel
-                </button>
-              </div>
-            ) : (
-              <>
-                {cameraSupported ? (
-                  <button
-                    onClick={startCamera}
-                    style={{ ...btnBase, width: '100%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px', boxShadow: '0 6px 20px rgba(255,112,67,0.35)', marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
-                  >
-                    <span style={{ fontSize: '22px' }}>📷</span>
-                    Scan barcode with camera
-                  </button>
-                ) : (
-                  /* iOS / non-BarcodeDetector: take a photo and let Claude read the barcode */
-                  <label style={{ ...btnBase, width: '100%', background: barcodeSearching ? '#f0f0f0' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: barcodeSearching ? '#bbb' : 'white', fontSize: '16px', padding: '14px', boxShadow: barcodeSearching ? 'none' : '0 6px 20px rgba(255,112,67,0.35)', marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', cursor: barcodeSearching ? 'default' : 'pointer', boxSizing: 'border-box' }}>
-                    <span style={{ fontSize: '22px' }}>📷</span>
-                    {barcodeSearching ? 'Reading barcode...' : 'Take photo of barcode'}
-                    <input
-                      ref={photoInputRef}
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      disabled={barcodeSearching}
-                      onChange={e => { const f = e.target.files?.[0]; if (f) captureBarcode(f); e.target.value = '' }}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
-                )}
-                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', margin: '0 0 8px', textAlign: 'center' }}>
-                  or enter barcode number manually
-                </p>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="text"
-                    placeholder="e.g. 5000128066717"
-                    value={barcodeInput}
-                    onChange={e => setBarcodeInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && lookupBarcode(barcodeInput)}
-                    style={{ ...inputStyle, flex: 1 }}
-                    inputMode="numeric"
-                  />
-                  <button
-                    onClick={() => lookupBarcode(barcodeInput)}
-                    disabled={barcodeSearching || !barcodeInput.trim()}
-                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', flexShrink: 0, padding: '10px 16px', opacity: (!barcodeInput.trim() || barcodeSearching) ? 0.5 : 1 }}
-                  >
-                    {barcodeSearching ? '...' : 'Look up'}
-                  </button>
-                </div>
-              </>
-            )}
-            {barcodeFound && (
-              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#4caf50', margin: '12px 0 0' }}>
-                ✅ Found: <strong>{barcodeFound}</strong> — review details below
-              </p>
-            )}
-            {barcodeError && (
-              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff9800', margin: '12px 0 0' }}>
-                {barcodeError}
-              </p>
-            )}
-          </div>
-        )}
+        {/* ══════════════════════════════════════════════════════════════════
+            SHARED ITEM FORM (manual + voice only)
+        ══════════════════════════════════════════════════════════════════ */}
+        {mode !== 'barcode' && (
+          <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
+            <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '18px', color: '#2d2d2d', margin: '0 0 16px' }}>Item Details</p>
 
-        {/* ── Shared item form ── */}
-        <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
-          <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '18px', color: '#2d2d2d', margin: '0 0 16px' }}>Item Details</p>
-
-          {/* Name */}
-          <div style={{ marginBottom: '14px' }}>
-            <label style={labelStyle}>Name *</label>
-            <input
-              type="text"
-              placeholder="e.g. Semi-Skimmed Milk"
-              value={form.name}
-              autoFocus={mode === 'manual'}
-              onChange={e => {
-                updateForm({ name: e.target.value })
-                if (!form.category) autoFillLocation(e.target.value, '')
-              }}
-              style={inputStyle}
-            />
-          </div>
-
-          {/* Quantity structure: count × size each + unit */}
-          <div style={{ marginBottom: '14px' }}>
-            <label style={labelStyle}>Quantity</label>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Count</label>
-                <input
-                  type="number" min={1} step={1} placeholder="1"
-                  value={form.itemCount}
-                  onChange={e => updateForm({ itemCount: e.target.value, quantity: e.target.value, quantityOriginal: e.target.value })}
-                  style={{ ...inputStyle, textAlign: 'center' }}
-                />
-              </div>
-              <span style={{ color: '#ccc', fontWeight: 700, fontSize: '18px', paddingBottom: '11px', flexShrink: 0 }}>×</span>
-              <div style={{ flex: 1 }}>
-                <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Size each</label>
-                <input
-                  type="number" min={0} step={0.1} placeholder="—"
-                  value={form.amountPerUnit}
-                  onChange={e => updateForm({ amountPerUnit: e.target.value })}
-                  style={{ ...inputStyle, textAlign: 'center' }}
-                />
-              </div>
-              <div style={{ flex: 2 }}>
-                <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Unit</label>
-                <select value={form.unit} onChange={e => updateForm({ unit: e.target.value })} style={selectStyle}>
-                  {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                </select>
-              </div>
-            </div>
-            <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#ccc', margin: '4px 0 0' }}>
-              e.g. 6 × 330 ml cans, or just 1 × 750 ml bottle
-            </p>
-          </div>
-
-          {/* Location */}
-          <div style={{ marginBottom: '14px' }}>
-            <label style={labelStyle}>Location</label>
-            <select
-              value={form.location}
-              onChange={e => updateForm({ location: e.target.value as StorageLocation })}
-              style={selectStyle}
-            >
-              {LOCATIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
-            </select>
-          </div>
-
-          {/* Category */}
-          <div style={{ marginBottom: '14px' }}>
-            <label style={labelStyle}>Category</label>
-            <select
-              value={form.category}
-              onChange={e => {
-                updateForm({ category: e.target.value })
-                autoFillLocation(form.name, e.target.value)
-              }}
-              style={selectStyle}
-            >
-              <option value="">— Select category —</option>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-
-          {/* Expiry date — hide for household items */}
-          {form.location !== 'household' && (
+            {/* Name */}
             <div style={{ marginBottom: '14px' }}>
-              <label style={labelStyle}>Expiry date (optional)</label>
-              <input type="date" value={form.expiryDate} onChange={e => updateForm({ expiryDate: e.target.value })} style={inputStyle} />
+              <label style={labelStyle}>Name *</label>
+              <input type="text" placeholder="e.g. Semi-Skimmed Milk" value={form.name} autoFocus={mode === 'manual'}
+                onChange={e => { updateForm({ name: e.target.value }); if (!form.category) autoFillLocation(e.target.value, '') }}
+                style={inputStyle} />
             </div>
-          )}
 
-          {/* Already opened toggle */}
-          <div style={{ marginBottom: form.opened ? '10px' : '14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div
-              onClick={() => updateForm({ opened: !form.opened, openedAt: !form.opened ? new Date().toISOString().split('T')[0] : '' })}
-              style={{
-                width: '44px', height: '24px', borderRadius: '12px', cursor: 'pointer', flexShrink: 0,
-                background: form.opened ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee',
-                position: 'relative', transition: 'background 0.2s',
-              }}
-            >
-              <div style={{
-                position: 'absolute', top: '3px', width: '18px', height: '18px', borderRadius: '50%',
-                background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
-                left: form.opened ? '23px' : '3px', transition: 'left 0.2s',
-              }} />
+            {/* Count × size each + unit */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={labelStyle}>Quantity</label>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Count</label>
+                  <input type="number" min={1} step={1} placeholder="1" value={form.itemCount}
+                    onChange={e => updateForm({ itemCount: e.target.value, quantity: e.target.value, quantityOriginal: e.target.value })}
+                    style={{ ...inputStyle, textAlign: 'center' }} />
+                </div>
+                <span style={{ color: '#ccc', fontWeight: 700, fontSize: '18px', paddingBottom: '11px', flexShrink: 0 }}>×</span>
+                <div style={{ flex: 1 }}>
+                  <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Size each</label>
+                  <input type="number" min={0} step={0.1} placeholder="—" value={form.amountPerUnit}
+                    onChange={e => updateForm({ amountPerUnit: e.target.value })}
+                    style={{ ...inputStyle, textAlign: 'center' }} />
+                </div>
+                <div style={{ flex: 2 }}>
+                  <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Unit</label>
+                  <select value={form.unit} onChange={e => updateForm({ unit: e.target.value })} style={selectStyle}>
+                    {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              </div>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#ccc', margin: '4px 0 0' }}>
+                e.g. 6 × 330 ml cans, or just 1 × 750 ml bottle
+              </p>
             </div>
-            <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555' }}>
-              Already opened
-            </span>
-          </div>
-          {form.opened && (
-            <div style={{ marginBottom: '14px', paddingLeft: '8px', borderLeft: '3px solid rgba(255,112,67,0.3)' }}>
-              <label style={labelStyle}>Opened on</label>
-              <input type="date" value={form.openedAt} onChange={e => updateForm({ openedAt: e.target.value })} style={inputStyle} />
+
+            {/* Location */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={labelStyle}>Location</label>
+              <select value={form.location} onChange={e => updateForm({ location: e.target.value as StorageLocation })} style={selectStyle}>
+                {LOCATIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+              </select>
             </div>
-          )}
 
-          {/* Retailer */}
-          <div style={{ marginBottom: '14px' }}>
-            <label style={labelStyle}>Retailer (optional)</label>
-            <input
-              type="text"
-              placeholder="e.g. Tesco, Waitrose, or leave blank"
-              value={form.retailer}
-              onChange={e => updateForm({ retailer: e.target.value })}
-              style={inputStyle}
-            />
+            {/* Category */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={labelStyle}>Category</label>
+              <select value={form.category} onChange={e => { updateForm({ category: e.target.value }); autoFillLocation(form.name, e.target.value) }} style={selectStyle}>
+                <option value="">— Select category —</option>
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            {/* Expiry */}
+            {form.location !== 'household' && (
+              <div style={{ marginBottom: '14px' }}>
+                <label style={labelStyle}>Expiry date (optional)</label>
+                <input type="date" value={form.expiryDate} onChange={e => updateForm({ expiryDate: e.target.value })} style={inputStyle} />
+              </div>
+            )}
+
+            {/* Already opened toggle */}
+            <div style={{ marginBottom: form.opened ? '10px' : '14px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div onClick={() => updateForm({ opened: !form.opened, openedAt: !form.opened ? new Date().toISOString().split('T')[0] : '' })}
+                style={{ width: '44px', height: '24px', borderRadius: '12px', cursor: 'pointer', flexShrink: 0, background: form.opened ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', position: 'relative', transition: 'background 0.2s' }}>
+                <div style={{ position: 'absolute', top: '3px', width: '18px', height: '18px', borderRadius: '50%', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', left: form.opened ? '23px' : '3px', transition: 'left 0.2s' }} />
+              </div>
+              <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555' }}>Already opened</span>
+            </div>
+            {form.opened && (
+              <div style={{ marginBottom: '14px', paddingLeft: '8px', borderLeft: '3px solid rgba(255,112,67,0.3)' }}>
+                <label style={labelStyle}>Opened on</label>
+                <input type="date" value={form.openedAt} onChange={e => updateForm({ openedAt: e.target.value })} style={inputStyle} />
+              </div>
+            )}
+
+            {/* Retailer */}
+            <div style={{ marginBottom: '14px' }}>
+              <label style={labelStyle}>Retailer (optional)</label>
+              <input type="text" placeholder="e.g. Tesco, Waitrose, or leave blank" value={form.retailer} onChange={e => updateForm({ retailer: e.target.value })} style={inputStyle} />
+            </div>
+
+            {/* Purchase date */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={labelStyle}>Purchase date (optional)</label>
+              <input type="date" value={form.purchaseDate} onChange={e => updateForm({ purchaseDate: e.target.value })} style={inputStyle} />
+            </div>
+
+            {/* Save */}
+            <button onClick={handleSave} disabled={saving || !form.name.trim()}
+              style={{ ...btnBase, width: '100%', background: !form.name.trim() ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: !form.name.trim() ? '#bbb' : 'white', fontSize: '18px', padding: '16px', boxShadow: form.name.trim() ? '0 8px 24px rgba(255,112,67,0.4)' : 'none', fontFamily: "'Fredoka One',cursive", cursor: !form.name.trim() ? 'not-allowed' : 'pointer' }}>
+              {saving ? 'Saving...' : `Save${form.name.trim() ? ` "${form.name.trim()}"` : ''} to Inventory`}
+            </button>
           </div>
-
-          {/* Purchase date */}
-          <div style={{ marginBottom: '20px' }}>
-            <label style={labelStyle}>Purchase date (optional)</label>
-            <input type="date" value={form.purchaseDate} onChange={e => updateForm({ purchaseDate: e.target.value })} style={inputStyle} />
-          </div>
-
-          {/* Save button */}
-          <button
-            onClick={handleSave}
-            disabled={saving || !form.name.trim()}
-            style={{
-              ...btnBase, width: '100%', background: !form.name.trim() ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)',
-              color: !form.name.trim() ? '#bbb' : 'white', fontSize: '18px', padding: '16px',
-              boxShadow: form.name.trim() ? '0 8px 24px rgba(255,112,67,0.4)' : 'none',
-              fontFamily: "'Fredoka One',cursive", cursor: !form.name.trim() ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {saving ? 'Saving...' : `Save${form.name.trim() ? ` "${form.name.trim()}"` : ''} to Inventory`}
-          </button>
-        </div>
+        )}
 
       </div>
     </main>
