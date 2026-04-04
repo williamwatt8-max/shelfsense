@@ -3,32 +3,57 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-const PARSE_PROMPT = `You are a grocery and retail receipt parser. Extract every purchased item from this receipt image.
+const PARSE_PROMPT = `You are a specialist UK supermarket receipt parser. Extract every purchased item from this receipt image.
 
+STEP 1 — IDENTIFY RETAILER
+Read the header, logo, or store name at the top of the receipt. Identify the retailer (e.g. Morrisons, M&S, Tesco, Sainsbury's, Asda, Waitrose, Co-op, Lidl, Aldi).
+
+STEP 2 — APPLY RETAILER-SPECIFIC PARSING RULES
+
+▶ MORRISONS RECEIPTS
+Morrisons item rows follow a structured columnar format: QTY | DESCRIPTION | PRICE | TOTAL | DEPT
+• Treat each printed row as one item — do NOT merge adjacent rows
+• DEPT code at line end hints at category: F=fresh produce, A=ambient/cupboard, D=dairy — use as a hint, not absolute truth
+• Strip leading "M " from the description (Morrisons own-brand prefix noise) when building normalized_name:
+  - "M SEMI SKIM MILK 2L" → "Semi-Skimmed Milk 2L"
+  - "M FREE RANGE EGGS 6" → "Free Range Eggs 6"
+  - "M CHEDDAR CHEESE 400G" → "Cheddar Cheese 400g"
+  - "M STRAWBERRIES 400G" → "Strawberries 400g"
+• The PRICE column is the individual item price; TOTAL = qty × price — always extract per-item price
+• A "5" or "10" at the end of a line is likely a quantity column value, not part of the name
+
+▶ M&S RECEIPTS
+M&S item lines are compact and often abbreviated.
+• Item codes (numeric or short alphanumeric prefixes) may appear before the description — omit them from normalized_name
+• Use price context to interpret ambiguous names: an item at £7–12 is very likely wine or spirits; £0.05–0.30 is likely a carrier bag
+• COMPLETELY IGNORE any line or block containing these strings:
+  Items | Balance to Pay | VISA | MASTERCARD | AMEX | CONTACTLESS | Contactless | APPROVED
+  AUTH CODE | AID: | TVR: | TSI: | Cardholder | CARDHOLDER | Sparks | SPARKS | charity | Charity
+  Thank you | VAT No | QR | Receipt No | Please retain | Transaction | Store No | Tel:
+  dashes/separator lines (---) | timestamps (HH:MM) | store address lines | "App"
+• Paper bags, food bags, and other charged bags ARE real items — include them
+
+▶ TESCO / SAINSBURY'S / ASDA / WAITROSE / CO-OP
+Apply general parsing rules. No retailer-specific cleanup needed beyond standard abbreviation expansion.
+
+▶ LIDL / ALDI
+Items often show a short product code + description. Omit the numeric product code from normalized_name.
+
+STEP 3 — EXTRACTION RULES (ALL RETAILERS)
+1. raw_text: exact abbreviated text as it appears on the receipt line
+2. normalized_name: clear, human-readable product name — expand abbreviations, fix capitalisation, remove noise prefixes (M prefix for Morrisons, numeric codes for M&S/Lidl/Aldi)
+3. quantity: numeric quantity, default 1; if receipt shows "2 x £1.50" set quantity=2 and price=1.50; weight items "0.453 kg @ £5/kg" → quantity=0.453, unit=kg, price=total for that line
+4. unit: item | g | kg | ml | l | bottle | tin | loaf | pack | bag | box | head | fillet
+5. category: dairy | meat | fish | vegetables | fruit | bakery | tinned | dry goods | oils | frozen | drinks | snacks | alcohol | household | other
+6. confidence: 0.9=clearly identifiable, 0.7=likely correct, 0.5=best guess from context
+7. price: single-item price as a number (null if genuinely not found)
+8. Include ALL charged items: food, household products, toiletries, bags, alcohol — not just food
+9. SKIP these line types for ALL retailers: subtotals, VAT/tax lines, payment method lines (CASH/CARD/VISA), loyalty points, change/cashback, discount summary lines, non-item retailer sections listed in M&S rules above
+10. When uncertain, include the item with lower confidence (0.5–0.7) rather than omitting — the user can remove it during review
+
+STEP 4 — OUTPUT FORMAT
 Return ONLY raw JSON — no markdown, no code fences, no explanation:
-{"retailer_name":"Store Name","total":24.99,"items":[{"raw_text":"EXACT TEXT FROM RECEIPT","normalized_name":"Clear Product Name","quantity":1,"unit":"item","category":"dairy","confidence":0.9,"price":1.99}]}
-
-ITEM FIELDS:
-- raw_text: the exact abbreviated text as it appears on the receipt
-- normalized_name: a clear, human-readable product name (expand abbreviations, e.g. "SMSK MLK 2L" → "Semi-Skimmed Milk 2L")
-- quantity: numeric quantity (default 1 if not shown)
-- unit: item | g | kg | ml | l | bottle | tin | loaf | pack | bag | head | fillet
-- category: dairy | meat | fish | vegetables | fruit | bakery | tinned | dry goods | oils | frozen | drinks | snacks | alcohol | household | other
-- confidence: 0.9=clearly identifiable, 0.7=likely correct, 0.5=best guess from context
-- price: single-item price as a number (null if not found)
-
-EXTRACTION RULES:
-1. Use the price to identify items — e.g. "CLASSICS PG" at £8+ is Pinot Grigio wine, not PG Tips tea; a £0.10–0.30 item is likely a carrier bag
-2. Include ALL purchased items: food, household products, toiletries, baby items, bags, alcohol — not just food
-3. SKIP: subtotals, VAT/tax lines, payment method lines (CASH/CARD/CONTACTLESS), loyalty points, change/cashback, discount lines that aren't individual items
-4. Quantity multipliers: if receipt shows "2 x £1.50", set quantity=2 and price=1.50 (the per-item price)
-5. Weight-priced items: "0.453 kg @ £5.00/kg" → quantity=0.453, unit=kg, price=2.27 (the total for that line)
-6. Multi-buy promotions: if "3 FOR £5" applies to 3 separate line items, price each at 1.67
-7. Long receipts: extract every product line even if the receipt is complex or has many items
-8. When in doubt, include the item with lower confidence rather than omitting it — the user can remove it in the review step
-
-Return the retailer_name as the store name (e.g. "Tesco", "Asda", "Waitrose"). If unclear, use "Unknown Store".
-Return total as the final amount paid (after discounts). If unclear, use null.`
+{"retailer_name":"Morrisons","total":24.99,"items":[{"raw_text":"M SEMI SKIM MILK 2L","normalized_name":"Semi-Skimmed Milk 2L","quantity":1,"unit":"l","category":"dairy","confidence":0.9,"price":1.09}]}`
 
 export async function POST(req: NextRequest) {
   try {
@@ -69,12 +94,10 @@ export async function POST(req: NextRequest) {
     try {
       const parsed = JSON.parse(cleaned)
 
-      // Validate minimal shape — if items is missing or empty, still return what we have
       if (!parsed.items || !Array.isArray(parsed.items)) {
         parsed.items = []
       }
 
-      // Coerce each item to safe types
       parsed.items = parsed.items.map((item: any) => ({
         raw_text: String(item.raw_text || ''),
         normalized_name: String(item.normalized_name || item.raw_text || 'Unknown item'),
@@ -87,10 +110,8 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json(parsed)
     } catch {
-      // JSON parse failed — attempt to salvage partial JSON
       console.error('Failed to parse JSON response. Raw (first 800 chars):', cleaned.substring(0, 800))
 
-      // Try to extract the JSON object from within any surrounding text
       const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         try {

@@ -217,11 +217,16 @@ export default function Home() {
   }
 
   if (step === 'reviewing') {
+    const REVIEW_UNITS = ['item', 'pack', 'bag', 'box', 'bottle', 'tin', 'loaf', 'fillet', 'g', 'kg', 'ml', 'l']
+    const REVIEW_CATEGORIES = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
+    const fieldStyle = { border: '2px solid #eee', borderRadius: '8px', padding: '7px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px' }
     return (
       <main style={{...warmStyle, padding:'72px 24px 32px'}}>
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap');
           @keyframes voice-pulse { 0%,100%{transform:scale(1);opacity:1} 50%{transform:scale(1.12);opacity:0.85} }
+          .review-field { border: 2px solid #eee; border-radius: 8px; padding: 7px 8px; font-family: 'Nunito',sans-serif; font-weight: 700; font-size: 13px; background: white; }
+          .review-field:focus { outline: none; border-color: rgba(255,112,67,0.4); }
         `}</style>
         <div style={{maxWidth:'640px',margin:'0 auto'}}>
           <a href="/" style={{color:'#ff7043',fontWeight:700,fontSize:'14px',textDecoration:'none',fontFamily:"'Nunito',sans-serif"}}>← Back</a>
@@ -242,7 +247,6 @@ export default function Home() {
             {!voiceExpiryListening && !voiceExpiryProcessing && voiceExpiryFilled.length === 0 && !voiceExpiryError && (
               <p style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'12px',color:'#bbb',margin:'6px 0 0 4px'}}>e.g. "milk expires in 3 days, chicken is good until Sunday"</p>
             )}
-            {/* Filled summary */}
             {voiceExpiryFilled.length > 0 && (
               <div style={{background:'#f0fff4',border:'1.5px solid rgba(76,175,80,0.25)',borderRadius:'12px',padding:'12px 14px',marginTop:'10px'}}>
                 <p style={{fontFamily:"'Fredoka One',cursive",fontSize:'15px',color:'#388e3c',margin:'0 0 8px'}}>✅ Filled in {voiceExpiryFilled.length} expiry date{voiceExpiryFilled.length > 1 ? 's' : ''}:</p>
@@ -254,7 +258,6 @@ export default function Home() {
                 <button onClick={() => setVoiceExpiryFilled([])} style={{marginTop:'8px',background:'transparent',border:'none',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'12px',color:'#aaa',cursor:'pointer',padding:0}}>Dismiss</button>
               </div>
             )}
-            {/* Error */}
             {voiceExpiryError && !voiceExpiryListening && !voiceExpiryProcessing && (
               <div style={{background:'#fff0f0',border:'1.5px solid rgba(255,68,68,0.2)',borderRadius:'12px',padding:'10px 14px',marginTop:'10px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px'}}>
                 <p style={{fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'13px',color:'#ff4444',margin:0}}>😕 {voiceExpiryError}</p>
@@ -262,32 +265,104 @@ export default function Home() {
               </div>
             )}
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:'12px'}}>
-            {items.map((item, index) => (
-              <div key={item.id} style={{background:'white',borderRadius:'16px',padding:'16px',boxShadow:'0 4px 16px rgba(0,0,0,0.08)',border: item.confidence < 0.8 ? '2px solid #ffb347' : '2px solid transparent'}}>
-                <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'10px'}}>
-                  <input type="checkbox" checked={item.selected} onChange={(e) => { const updated = [...items]; updated[index].selected = e.target.checked; setItems(updated) }} style={{width:'20px',height:'20px',accentColor:'#ff7043'}} />
-                  <input type="text" value={item.normalized_name} onChange={(e) => { const updated = [...items]; updated[index].normalized_name = e.target.value; setItems(updated) }} style={{flex:1,border:'2px solid #eee',borderRadius:'10px',padding:'8px 12px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'15px',color:'#2d2d2d'}} />
-                  {item.price != null && <span style={{color:'#ff7043',fontWeight:800,fontSize:'15px',fontFamily:"'Nunito',sans-serif"}}>£{item.price.toFixed(2)}</span>}
-                  {item.confidence < 0.8 && <span style={{color:'#ff9800',fontSize:'12px',fontWeight:700,fontFamily:"'Nunito',sans-serif"}}>Low confidence</span>}
-                </div>
-                <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-                  <input type="number" value={item.quantity} onChange={(e) => { const updated = [...items]; updated[index].quantity = Number(e.target.value); setItems(updated) }} style={{width:'70px',border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
-                  <input type="text" value={item.unit} onChange={(e) => { const updated = [...items]; updated[index].unit = e.target.value; setItems(updated) }} style={{width:'70px',border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
-                  <select value={item.location} onChange={(e) => { const updated = [...items]; updated[index].location = e.target.value as StorageLocation; setItems(updated) }} style={{border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}}>
-                    <option value="fridge">Fridge</option>
-                    <option value="freezer">Freezer</option>
-                    <option value="cupboard">Cupboard</option>
-                    <option value="household">Household</option>
-                    <option value="other">Other</option>
-                  </select>
+
+          {/* ── Item cards ── */}
+          <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            {items.map((item, index) => {
+              function upd(patch: Partial<typeof item>) {
+                const next = [...items]
+                next[index] = { ...next[index], ...patch }
+                setItems(next)
+              }
+              return (
+                <div key={item.id} style={{background:'white',borderRadius:'14px',padding:'14px 16px',boxShadow:'0 2px 10px rgba(0,0,0,0.07)',border: item.confidence < 0.8 ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent'}}>
+
+                  {/* Row 1: checkbox + name + price */}
+                  <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
+                    <input
+                      type="checkbox"
+                      checked={item.selected}
+                      onChange={e => upd({ selected: e.target.checked })}
+                      style={{width:'18px',height:'18px',accentColor:'#ff7043',flexShrink:0}}
+                    />
+                    <input
+                      type="text"
+                      value={item.normalized_name}
+                      onChange={e => upd({ normalized_name: e.target.value })}
+                      style={{flex:1,border:'2px solid #eee',borderRadius:'8px',padding:'7px 10px',fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:'14px',color:'#2d2d2d',minWidth:0}}
+                    />
+                    <div style={{display:'flex',alignItems:'center',gap:'2px',flexShrink:0}}>
+                      <span style={{color:'#bbb',fontWeight:700,fontSize:'13px',fontFamily:"'Nunito',sans-serif"}}>£</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={item.price ?? ''}
+                        placeholder="—"
+                        onChange={e => upd({ price: e.target.value !== '' ? Number(e.target.value) : null })}
+                        style={{...fieldStyle,width:'58px',color:'#ff7043',textAlign:'right'}}
+                      />
+                    </div>
+                    {item.confidence < 0.8 && (
+                      <span style={{background:'rgba(255,179,71,0.15)',color:'#e08000',fontSize:'11px',fontWeight:700,padding:'3px 7px',borderRadius:'50px',fontFamily:"'Nunito',sans-serif",flexShrink:0}}>⚠ low</span>
+                    )}
+                  </div>
+
+                  {/* Row 2: qty + unit + location + category */}
+                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap',alignItems:'center'}}>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={item.quantity}
+                      onChange={e => upd({ quantity: Number(e.target.value) })}
+                      style={{...fieldStyle,width:'62px',textAlign:'center'}}
+                    />
+                    <select
+                      value={REVIEW_UNITS.includes(item.unit) ? item.unit : 'item'}
+                      onChange={e => upd({ unit: e.target.value })}
+                      style={{...fieldStyle}}
+                    >
+                      {REVIEW_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                    <select
+                      value={item.location}
+                      onChange={e => upd({ location: e.target.value as StorageLocation })}
+                      style={{...fieldStyle}}
+                    >
+                      <option value="fridge">❄️ Fridge</option>
+                      <option value="freezer">🧊 Freezer</option>
+                      <option value="cupboard">🗄️ Cupboard</option>
+                      <option value="household">🏠 Household</option>
+                      <option value="other">📦 Other</option>
+                    </select>
+                    <select
+                      value={item.category || ''}
+                      onChange={e => upd({ category: e.target.value || null })}
+                      style={{...fieldStyle}}
+                    >
+                      <option value="">— category —</option>
+                      {REVIEW_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+
+                  {/* Row 3: expiry (hidden for household) */}
                   {item.location !== 'household' && (
-                    <input type="date" value={item.expiry_date || ''} onChange={(e) => { const updated = [...items]; updated[index].expiry_date = e.target.value || null; setItems(updated) }} style={{border:'2px solid #eee',borderRadius:'10px',padding:'8px',fontFamily:"'Nunito',sans-serif",fontWeight:700}} />
+                    <div style={{marginTop:'8px'}}>
+                      <input
+                        type="date"
+                        value={item.expiry_date || ''}
+                        onChange={e => upd({ expiry_date: e.target.value || null })}
+                        style={{...fieldStyle,color: item.expiry_date ? '#2d2d2d' : '#bbb'}}
+                      />
+                    </div>
                   )}
+
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
+
           <button onClick={handleSave} style={{marginTop:'24px',width:'100%',background:'linear-gradient(135deg,#ff7043,#ff9a3c)',color:'white',fontFamily:"'Fredoka One',cursive",fontSize:'20px',padding:'16px',borderRadius:'50px',border:'none',cursor:'pointer',boxShadow:'0 8px 24px rgba(255,112,67,0.4)'}}>
             Save {items.filter((i) => i.selected).length} Items to Inventory
           </button>
