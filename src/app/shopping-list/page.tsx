@@ -5,14 +5,15 @@ import { supabase } from '@/lib/supabase'
 import { ShoppingListItem } from '@/lib/types'
 
 export default function ShoppingListPage() {
-  const [items,   setItems]   = useState<ShoppingListItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [adding,  setAdding]  = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newQty,  setNewQty]  = useState('1')
-  const [newUnit, setNewUnit] = useState('item')
-  const [saving,  setSaving]  = useState(false)
-  const [toast,   setToast]   = useState<string | null>(null)
+  const [items,        setItems]        = useState<ShoppingListItem[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [adding,       setAdding]       = useState(false)
+  const [newName,      setNewName]      = useState('')
+  const [newQty,       setNewQty]       = useState('1')
+  const [newUnit,      setNewUnit]      = useState('item')
+  const [saving,       setSaving]       = useState(false)
+  const [toast,        setToast]        = useState<string | null>(null)
+  const [boughtPrompt, setBoughtPrompt] = useState<ShoppingListItem | null>(null)
 
   const UNITS = ['item', 'g', 'kg', 'ml', 'l', 'pack', 'tsp', 'tbsp', 'cup', 'clove', 'bunch']
 
@@ -55,9 +56,23 @@ export default function ShoppingListPage() {
   }
 
   async function toggleChecked(item: ShoppingListItem) {
-    await supabase.from('shopping_list_items').update({ checked: !item.checked }).eq('id', item.id)
-    setItems(prev => prev.map(i => i.id === item.id ? { ...i, checked: !i.checked } : i)
+    const newChecked = !item.checked
+    await supabase.from('shopping_list_items').update({ checked: newChecked }).eq('id', item.id)
+    setItems(prev => prev.map(i => i.id === item.id ? { ...i, checked: newChecked } : i)
       .sort((a, b) => Number(a.checked) - Number(b.checked) || 0))
+    // When checking an item off, offer to add to inventory
+    if (newChecked) setBoughtPrompt(item)
+  }
+
+  async function addBoughtToInventory(item: ShoppingListItem) {
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user?.id ?? null
+    await supabase.from('inventory_items').insert({
+      name: item.name, quantity: item.quantity, quantity_original: item.quantity,
+      unit: item.unit, location: 'cupboard', source: 'manual', status: 'active', user_id: userId,
+    })
+    setBoughtPrompt(null)
+    showToast(`📦 ${item.name} added to inventory`)
   }
 
   async function deleteItem(id: string) {
@@ -124,10 +139,30 @@ export default function ShoppingListPage() {
         </div>
       )}
 
+      {/* Bought → add to inventory prompt */}
+      {boughtPrompt && (
+        <div style={{ position: 'fixed', bottom: '90px', left: '50%', transform: 'translateX(-50%)', background: 'white', borderRadius: '16px', padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)', zIndex: 2100, minWidth: '280px', maxWidth: '340px', width: 'calc(100vw - 40px)' }}>
+          <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: '0 0 4px' }}>
+            Add to pantry?
+          </p>
+          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 14px' }}>
+            You bought <b style={{ color: '#2d2d2d' }}>{boughtPrompt.name}</b> — add it to your inventory?
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={() => addBoughtToInventory(boughtPrompt)} style={{ ...btn('linear-gradient(135deg,#ff7043,#ff9a3c)'), flex: 1, padding: '10px' }}>
+              📦 Add to Pantry
+            </button>
+            <button onClick={() => setBoughtPrompt(null)} style={{ ...btn('white', '#888'), padding: '10px 16px' }}>
+              Skip
+            </button>
+          </div>
+        </div>
+      )}
+
       <div style={{ maxWidth: '640px', margin: '0 auto' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-          <a href="/recipes" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Recipes</a>
+          <a href="/" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Home</a>
           <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '32px', color: '#2d2d2d', margin: 0, flex: 1 }}>Shopping List</h1>
           <button onClick={() => setAdding(v => !v)}
             style={btn(adding ? 'white' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', adding ? '#ff7043' : 'white')}>

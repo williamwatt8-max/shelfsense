@@ -725,20 +725,29 @@ export default function InventoryPage() {
 
   const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => {
     const qtyDisplay = (() => {
+      const fmt = (n: number) => n % 1 === 0 ? String(n) : n.toFixed(1)
+      const orig = quantityOriginal ?? quantity
+      const hasUsed = orig > quantity + 0.001
+
       if (itemCount && itemCount > 1 && amountPerUnit) {
-        const used = quantityOriginal != null && quantityOriginal > quantity
-        return used
-          ? `${quantity} of ${itemCount} × ${amountPerUnit} ${unit}`
-          : `${itemCount} × ${amountPerUnit} ${unit}`
+        // Multi-pack: quantity = count × amountPerUnit (new model)
+        if (hasUsed) return `${fmt(quantity)} of ${fmt(orig)} ${unit}`
+        return `${itemCount} × ${amountPerUnit} ${unit}`
       }
-      if (amountPerUnit && (!itemCount || itemCount === 1)) {
-        return quantityOriginal && quantityOriginal > quantity
-          ? `${quantity} of ${quantityOriginal} × ${amountPerUnit} ${unit}`
-          : `${amountPerUnit} ${unit}`
+      if (amountPerUnit) {
+        // Single pack with known size. quantity ≈ amountPerUnit means new model.
+        // Old model had quantity=1; detect by checking if orig ≈ amountPerUnit.
+        const isNewModel = Math.abs(orig - amountPerUnit) / amountPerUnit < 0.15
+        if (hasUsed) {
+          const displayOrig = isNewModel ? orig : amountPerUnit
+          const displayQty  = isNewModel ? quantity : parseFloat((quantity * amountPerUnit).toFixed(3))
+          return `${fmt(displayQty)} of ${fmt(displayOrig)} ${unit}`
+        }
+        return `${amountPerUnit} ${unit}`
       }
-      return quantityOriginal && quantityOriginal > quantity
-        ? `${quantity} of ${quantityOriginal} ${unit}`
-        : `${quantity} ${unit}`
+      // Plain count-only item
+      if (hasUsed) return `${fmt(quantity)} of ${fmt(orig)} ${unit}`
+      return `${fmt(quantity)} ${unit}`
     })()
     return (
       <div style={{ flex: 1, minWidth: 0 }}>

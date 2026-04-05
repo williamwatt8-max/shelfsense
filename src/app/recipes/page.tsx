@@ -41,11 +41,9 @@ function toBase(qty: number, unit: string): { qty: number; unit: string } {
   }
 }
 
-// Total available from an inventory item in its base unit
+// Total available from an inventory item in its base unit.
+// With the new quantity model, quantity already = count × amount_per_unit (total amount).
 function availableBase(item: InventoryItem): { qty: number; unit: string } {
-  if (item.amount_per_unit && item.amount_per_unit > 0) {
-    return toBase(item.quantity * item.amount_per_unit, item.unit)
-  }
   return toBase(item.quantity, item.unit)
 }
 
@@ -136,8 +134,10 @@ export default function RecipesPage() {
   const [savingList,     setSavingList]     = useState(false)
   const [listSaved,      setListSaved]      = useState(false)
   const [toast,          setToast]          = useState<string | null>(null)
+  const [searchQuery,    setSearchQuery]    = useState('')
+  const [editMode,       setEditMode]       = useState(false)
 
-  // Add form state
+  // Add / edit form state (shared between add_form phase and edit mode)
   const [draftName,         setDraftName]         = useState('')
   const [draftServings,     setDraftServings]      = useState('2')
   const [draftInstructions, setDraftInstructions]  = useState('')
@@ -267,6 +267,39 @@ export default function RecipesPage() {
     loadRecipes()
   }
 
+  function startEditRecipe(recipe: RecipeWithIngredients) {
+    setDraftName(recipe.name)
+    setDraftServings(String(recipe.base_servings))
+    setDraftInstructions(recipe.instructions || '')
+    setDraftIngredients(recipe.ingredients.map(i => ({ id: i.id, name: i.name, quantity: String(i.quantity), unit: i.unit })))
+    setEditMode(true)
+  }
+
+  async function saveRecipeEdits() {
+    if (!selectedRecipe || !draftName.trim()) return
+    setSaving(true)
+    const validIngs = draftIngredients.filter(i => i.name.trim())
+    await supabase.from('recipes').update({
+      name: draftName.trim(),
+      base_servings: parseInt(draftServings) || 2,
+      instructions: draftInstructions.trim() || null,
+    }).eq('id', selectedRecipe.id)
+    // Replace ingredients: delete old, insert new
+    await supabase.from('recipe_ingredients').delete().eq('recipe_id', selectedRecipe.id)
+    if (validIngs.length > 0) {
+      await supabase.from('recipe_ingredients').insert(
+        validIngs.map(i => ({ recipe_id: selectedRecipe.id, name: i.name.trim().toLowerCase(), quantity: parseFloat(i.quantity) || 1, unit: i.unit }))
+      )
+    }
+    setSaving(false)
+    setEditMode(false)
+    showToast(`✅ ${draftName.trim()} updated!`)
+    await loadRecipes()
+    // Refresh selectedRecipe from updated data
+    const updated = recipes.find(r => r.id === selectedRecipe.id)
+    if (updated) { setSelectedRecipe(updated); computeMatches(updated, desiredServings, inventory) }
+  }
+
   async function openDetail(recipe: RecipeWithIngredients) {
     setSelectedRecipe(recipe)
     setDesiredServings(recipe.base_servings)
@@ -338,19 +371,43 @@ export default function RecipesPage() {
     setSavingList(true)
     const { data: { session } } = await supabase.auth.getSession()
     const userId = session?.user?.id ?? null
-    const { error } = await supabase.from('shopping_list_items').insert(
-      shoppingPreview.map(item => ({
-        user_id:   userId,
-        name:      item.name,
-        quantity:  item.qty,
-        unit:      item.unit,
-        recipe_id: item.fromRecipeId,
-      }))
-    )
+
+    // Fetch existing unchecked shopping list items to merge duplicates
+    const { data: existing } = await supabase
+      .from('shopping_list_items').select('*').eq('user_id', userId!).eq('checked', false)
+    const existingItems = existing || []
+
+    const toInsert: typeof shoppingPreview = []
+    const toUpdate: { id: string; quantity: number }[] = []
+
+    for (const item of shoppingPreview) {
+      const normName = item.name.toLowerCase().trim()
+      const match = existingItems.find(e =>
+        e.name.toLowerCase().trim() === normName && e.unit === item.unit
+      )
+      if (match) {
+        toUpdate.push({ id: match.id, quantity: match.quantity + item.qty })
+      } else {
+        toInsert.push(item)
+      }
+    }
+
+    // Apply updates
+    await Promise.all(toUpdate.map(u =>
+      supabase.from('shopping_list_items').update({ quantity: u.quantity }).eq('id', u.id)
+    ))
+
+    // Insert new
+    if (toInsert.length > 0) {
+      const { error } = await supabase.from('shopping_list_items').insert(
+        toInsert.map(item => ({ user_id: userId, name: item.name, quantity: item.qty, unit: item.unit, recipe_id: item.fromRecipeId }))
+      )
+      if (error) { setSavingList(false); alert('Error: ' + error.message); return }
+    }
+
     setSavingList(false)
-    if (error) { alert('Error: ' + error.message); return }
     setListSaved(true)
-    showToast(`✅ ${shoppingPreview.length} items added to shopping list`)
+    showToast(`✅ ${shoppingPreview.length} item${shoppingPreview.length !== 1 ? 's' : ''} added to shopping list${toUpdate.length > 0 ? ` (${toUpdate.length} merged)` : ''}`)
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -475,8 +532,8 @@ export default function RecipesPage() {
         {/* ══════════════════════════════════════════════════════ LIST ══ */}
         {phase === 'list' && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-              <a href="/inventory" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Back</a>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+              <a href="/" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Home</a>
               <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '32px', color: '#2d2d2d', margin: 0, flex: 1 }}>Recipes</h1>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={() => { resetAddForm(); setPhase('add_form') }} style={btn('linear-gradient(135deg,#ff7043,#ff9a3c)')}>
@@ -487,6 +544,19 @@ export default function RecipesPage() {
                 </button>
               </div>
             </div>
+
+            {/* Search */}
+            {recipes.length > 2 && (
+              <div style={{ marginBottom: '16px' }}>
+                <input
+                  type="text"
+                  placeholder="🔍 Search recipes..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  style={{ ...inp, background: 'white' }}
+                />
+              </div>
+            )}
 
             {loading && (
               <p style={{ textAlign: 'center', color: '#aaa', fontWeight: 700, marginTop: '40px' }}>Loading recipes...</p>
@@ -510,22 +580,24 @@ export default function RecipesPage() {
               </div>
             )}
 
-            {recipes.map(recipe => (
-              <div key={recipe.id} onClick={() => openDetail(recipe)}
-                style={{ ...card, marginBottom: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '14px' }}>
-                <div style={{ fontSize: '32px' }}>🍽️</div>
-                <div style={{ flex: 1 }}>
-                  <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '18px', color: '#2d2d2d', margin: '0 0 2px' }}>
-                    {recipe.name}
-                  </h3>
-                  <p style={{ color: '#bbb', fontWeight: 700, fontSize: '12px', margin: 0 }}>
-                    {recipe.base_servings} serving{recipe.base_servings !== 1 ? 's' : ''} · {recipe.ingredients.length} ingredient{recipe.ingredients.length !== 1 ? 's' : ''}
-                    {recipe.source === 'scanned' && ' · 📷 scanned'}
-                  </p>
+            {recipes
+              .filter(r => !searchQuery || r.name.toLowerCase().includes(searchQuery.toLowerCase()))
+              .map(recipe => (
+                <div key={recipe.id} onClick={() => openDetail(recipe)}
+                  style={{ ...card, marginBottom: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{ fontSize: '32px' }}>🍽️</div>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '18px', color: '#2d2d2d', margin: '0 0 2px' }}>
+                      {recipe.name}
+                    </h3>
+                    <p style={{ color: '#bbb', fontWeight: 700, fontSize: '12px', margin: 0 }}>
+                      {recipe.base_servings} serving{recipe.base_servings !== 1 ? 's' : ''} · {recipe.ingredients.length} ingredient{recipe.ingredients.length !== 1 ? 's' : ''}
+                      {recipe.source === 'scanned' && ' · 📷 scanned'}
+                    </p>
+                  </div>
+                  <span style={{ color: '#ddd', fontSize: '20px' }}>›</span>
                 </div>
-                <span style={{ color: '#ddd', fontSize: '20px' }}>›</span>
-              </div>
-            ))}
+              ))}
           </>
         )}
 
@@ -685,10 +757,59 @@ export default function RecipesPage() {
         {phase === 'detail' && selectedRecipe && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-              <button onClick={() => setPhase('list')} style={{ background: 'none', border: 'none', color: '#ff7043', fontWeight: 700, fontSize: '14px', cursor: 'pointer', padding: 0 }}>← Recipes</button>
+              <button onClick={() => { setPhase('list'); setEditMode(false) }} style={{ background: 'none', border: 'none', color: '#ff7043', fontWeight: 700, fontSize: '14px', cursor: 'pointer', padding: 0 }}>← Recipes</button>
               <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '26px', color: '#2d2d2d', margin: 0, flex: 1, lineHeight: 1.2 }}>{selectedRecipe.name}</h1>
+              <button onClick={() => { if (editMode) setEditMode(false); else startEditRecipe(selectedRecipe) }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', color: editMode ? '#ff7043' : '#aaa', padding: '4px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }}>
+                {editMode ? '✕ Cancel' : '✏️ Edit'}
+              </button>
               <button onClick={() => deleteRecipe(selectedRecipe.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#ddd', padding: '4px' }}>🗑</button>
             </div>
+
+            {/* ── Edit mode form ── */}
+            {editMode && (
+              <div style={{ ...card, marginBottom: '16px', border: '2px solid rgba(255,112,67,0.2)' }}>
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff7043', margin: '0 0 14px' }}>✏️ Edit Recipe</p>
+                <div style={{ marginBottom: '10px' }}>
+                  <label style={lbl}>Name</label>
+                  <input style={inp} value={draftName} onChange={e => setDraftName(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                  <div>
+                    <label style={lbl}>Serves</label>
+                    <input style={{ ...inp, width: '72px' }} type="number" min={1} value={draftServings} onChange={e => setDraftServings(e.target.value)} />
+                  </div>
+                </div>
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <label style={lbl}>Ingredients</label>
+                    <button onClick={addIngredientRow} style={{ ...btn('rgba(255,112,67,0.1)', '#ff7043'), padding: '4px 12px', fontSize: '12px' }}>+ Add</button>
+                  </div>
+                  {draftIngredients.map(ing => (
+                    <div key={ing.id} style={{ display: 'flex', gap: '6px', marginBottom: '6px', alignItems: 'center' }}>
+                      <input style={{ ...inp, flex: 3 }} placeholder="ingredient" value={ing.name} onChange={e => updateIngredient(ing.id, { name: e.target.value })} />
+                      <input style={{ ...inp, width: '56px', flex: 'none', textAlign: 'center' }} type="number" min={0} step={0.1} placeholder="qty" value={ing.quantity} onChange={e => updateIngredient(ing.id, { quantity: e.target.value })} />
+                      <select style={{ ...inp, flex: 'none', width: '68px', padding: '8px 4px' }} value={ing.unit} onChange={e => updateIngredient(ing.id, { unit: e.target.value })}>
+                        {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                      <button onClick={() => removeIngredient(ing.id)} style={{ background: 'none', border: 'none', color: '#ddd', cursor: 'pointer', fontSize: '15px', padding: '4px' }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={lbl}>Instructions (optional)</label>
+                  <textarea rows={3} style={{ ...inp, resize: 'vertical' as const, lineHeight: 1.5 }} value={draftInstructions} onChange={e => setDraftInstructions(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={saveRecipeEdits} disabled={saving || !draftName.trim()}
+                    style={{ ...btn(saving ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', saving ? '#bbb' : 'white'), flex: 1, padding: '11px' }}>
+                    {saving ? 'Saving...' : '💾 Save Changes'}
+                  </button>
+                  <button onClick={() => setEditMode(false)} style={{ ...btn('white', '#888') }}>Cancel</button>
+                </div>
+              </div>
+            )}
+
 
             {/* Servings control */}
             <div style={{ ...card, marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>

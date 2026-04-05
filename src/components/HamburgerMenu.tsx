@@ -5,8 +5,8 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 
 const navItems = [
-  { href: '/add',           label: 'Add Item',      emoji: '➕', desc: 'Manual, voice or barcode' },
-  { href: '/',              label: 'Scan Receipt',  emoji: '📷', desc: 'Scan a grocery receipt'   },
+  { href: '/',              label: 'Home',          emoji: '🏠', desc: 'Dashboard & expiry alerts'  },
+  { href: '/add',           label: 'Add Item',      emoji: '➕', desc: 'Manual, voice, scan & receipt' },
   { href: '/inventory',     label: 'Inventory',     emoji: '📦', desc: 'Your food & items'        },
   { href: '/recipes',       label: 'Recipes',       emoji: '🍽️', desc: 'Recipes & meal planning'  },
   { href: '/shopping-list', label: 'Shopping List', emoji: '🛒', desc: 'Items to buy'             },

@@ -3,10 +3,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { suggestLocation } from '@/lib/categoriser'
-import { StorageLocation } from '@/lib/types'
+import { StorageLocation, ReviewItem } from '@/lib/types'
 
-type Mode        = 'manual' | 'voice' | 'barcode'
+type Mode        = 'manual' | 'voice' | 'barcode' | 'receipt'
 type BarcodePhase = 'idle' | 'scanning' | 'reviewing' | 'saved'
+type ReceiptStep  = 'upload' | 'reviewing' | 'done'
 
 // ── Single-item form (manual / voice modes) ──────────────────────────────────
 
@@ -96,6 +97,19 @@ export default function AddPage() {
   const lastBarcodeRef  = useRef('')
   const lastScanTimeRef = useRef(0)
 
+  // ── Receipt state ─────────────────────────────────────────────────────────
+  const [receiptStep,           setReceiptStep]           = useState<ReceiptStep>('upload')
+  const [receiptLoading,        setReceiptLoading]        = useState(false)
+  const [receiptRetailer,       setReceiptRetailer]       = useState('')
+  const [receiptTotal,          setReceiptTotal]          = useState<number | null>(null)
+  const [receiptItems,          setReceiptItems]          = useState<ReviewItem[]>([])
+  const [receiptPreview,        setReceiptPreview]        = useState<string | null>(null)
+  const [rVoiceListening,       setRVoiceListening]       = useState(false)
+  const [rVoiceProcessing,      setRVoiceProcessing]      = useState(false)
+  const [rVoiceFilled,          setRVoiceFilled]          = useState<{ name: string; date: string }[]>([])
+  const [rVoiceError,           setRVoiceError]           = useState<string | null>(null)
+  const receiptFileRef          = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     return () => stopCamera()
   }, [])
@@ -107,6 +121,11 @@ export default function AddPage() {
       stopCamera()
       setBarcodePhase('idle')
       setBatchItems([])
+    }
+    if (m !== 'receipt') {
+      setReceiptStep('upload')
+      setReceiptPreview(null)
+      setReceiptItems([])
     }
     setMode(m)
     setVoiceError(null)
@@ -187,7 +206,7 @@ export default function AddPage() {
     const qty = parseFloat(form.quantity) || 1
     const { error } = await supabase.from('inventory_items').insert({
       name: form.name.trim(),
-      count: (parseInt(form.itemCount) || 1) > 1 ? parseInt(form.itemCount) : null,
+      count: form.amountPerUnit ? (parseInt(form.itemCount) || 1) : ((parseInt(form.itemCount) || 1) > 1 ? parseInt(form.itemCount) : null),
       amount_per_unit: form.amountPerUnit ? parseFloat(form.amountPerUnit) : null,
       quantity: qty,
       quantity_original: parseFloat(form.quantityOriginal) || qty,
@@ -210,6 +229,111 @@ export default function AddPage() {
 
   function addAnother() {
     setForm(blankForm()); setSaved(false); setVoiceTranscript(''); setVoiceFilled(false)
+  }
+
+  // ── Receipt — file upload ──────────────────────────────────────────────────
+
+  async function handleReceiptFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setReceiptPreview(URL.createObjectURL(file))
+    setReceiptLoading(true)
+    const formData = new FormData()
+    formData.append('receipt', file)
+    try {
+      const res = await fetch('/api/parse-receipt', { method: 'POST', body: formData })
+      const result = await res.json()
+      if (result.error) { alert('Error: ' + result.error); setReceiptLoading(false); return }
+      setReceiptRetailer(result.retailer_name || 'Unknown Store')
+      setReceiptTotal(result.total || null)
+      setReceiptItems(result.items.map((item: any, i: number) => ({
+        ...item,
+        id: String(i),
+        receipt_order: i,
+        selected: true,
+        amount_per_unit: null,
+        location: suggestLocation(item.normalized_name, item.category) as StorageLocation,
+        expiry_date: null,
+      })))
+      setReceiptStep('reviewing')
+    } catch { alert('Something went wrong. Try again.') }
+    setReceiptLoading(false)
+  }
+
+  function startReceiptVoiceExpiry() {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SR) { setRVoiceError("Voice input isn't supported in this browser. Try Chrome or Safari."); return }
+    const recognition = new SR()
+    recognition.lang = 'en-GB'; recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1
+    let finalTranscript = ''; let silenceTimer: ReturnType<typeof setTimeout> | null = null
+    const absoluteTimer = setTimeout(() => recognition.stop(), 8000)
+    setRVoiceListening(true); setRVoiceFilled([]); setRVoiceError(null)
+    recognition.start()
+    recognition.onresult = (e: any) => {
+      if (silenceTimer) clearTimeout(silenceTimer)
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' '
+      }
+      silenceTimer = setTimeout(() => recognition.stop(), 3000)
+    }
+    recognition.onerror = (e: any) => {
+      if (e.error !== 'no-speech') { clearTimeout(absoluteTimer); if (silenceTimer) clearTimeout(silenceTimer); setRVoiceListening(false); setRVoiceError("Couldn't hear you — please try again.") }
+    }
+    recognition.onend = async () => {
+      clearTimeout(absoluteTimer); if (silenceTimer) clearTimeout(silenceTimer)
+      setRVoiceListening(false)
+      const transcript = finalTranscript.trim()
+      if (!transcript) { setRVoiceError('No speech detected — try again.'); return }
+      setRVoiceProcessing(true)
+      try {
+        const res = await fetch('/api/voice-expiry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript, items: receiptItems.map(i => i.normalized_name) }) })
+        const result = await res.json()
+        if (result.error) throw new Error(result.error)
+        const filled: { name: string; date: string }[] = []
+        const updated = [...receiptItems]
+        for (const match of (result.matches || [])) {
+          const matchName = match.item_name.toLowerCase()
+          const idx = updated.findIndex(i => i.normalized_name.toLowerCase() === matchName || i.normalized_name.toLowerCase().includes(matchName) || matchName.includes(i.normalized_name.toLowerCase()))
+          if (idx !== -1 && match.expiry_date) { updated[idx] = { ...updated[idx], expiry_date: match.expiry_date }; filled.push({ name: updated[idx].normalized_name, date: match.expiry_date }) }
+        }
+        setReceiptItems(updated)
+        if (filled.length > 0) setRVoiceFilled(filled); else setRVoiceError("Couldn't match any items — try again.")
+      } catch { setRVoiceError('Something went wrong. Please try again.') }
+      setRVoiceProcessing(false)
+    }
+  }
+
+  async function handleReceiptSave() {
+    const selected = receiptItems.filter(i => i.selected)
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user?.id ?? null
+    const { data: receiptData, error: receiptError } = await supabase
+      .from('receipts').insert({ retailer_name: receiptRetailer, total: receiptTotal, user_id: userId }).select().single()
+    if (receiptError) { alert('Error saving receipt: ' + receiptError.message); return }
+    const receiptId = receiptData.id
+    const { data: receiptItemsData, error: itemsError } = await supabase.from('receipt_items').insert(selected.map(item => ({
+      receipt_id: receiptId, raw_text: item.name, normalized_name: item.normalized_name,
+      quantity: item.quantity, unit: item.unit, category: item.category || null,
+      confidence: item.confidence, price: item.price || null,
+    }))).select()
+    if (itemsError) { alert('Error saving items: ' + itemsError.message); return }
+    const apu = (item: ReviewItem) => item.amount_per_unit
+    const { error: inventoryError } = await supabase.from('inventory_items').insert(
+      selected.map((item, i) => {
+        const cnt = item.quantity > 1 && Number.isInteger(item.quantity) ? item.quantity : null
+        const apuVal = apu(item)
+        const qty = apuVal && cnt ? cnt * apuVal : apuVal ? apuVal : item.quantity
+        return {
+          name: item.normalized_name, quantity: qty, quantity_original: qty,
+          count: apuVal ? (cnt ?? 1) : cnt,
+          amount_per_unit: apuVal, unit: item.unit,
+          location: item.location, category: item.category || null,
+          expiry_date: item.expiry_date || null, receipt_item_id: receiptItemsData?.[i]?.id || null,
+          retailer: receiptRetailer || null, source: 'receipt', status: 'active', user_id: userId,
+        }
+      })
+    )
+    if (inventoryError) { alert('Error saving to inventory: ' + inventoryError.message) } else { setReceiptStep('done') }
   }
 
   // ── Barcode — camera ───────────────────────────────────────────────────────
@@ -384,12 +508,14 @@ export default function AddPage() {
     const userId = session?.user?.id ?? null
     const inserts = batchItems.map(item => {
       const cnt = parseInt(item.count) || 1
+      const apu = item.amountPerUnit ? parseFloat(item.amountPerUnit) : null
+      const qty = apu ? cnt * apu : cnt
       return {
         name: item.name.trim() || item.barcode,
-        quantity: cnt,
-        quantity_original: cnt,
-        count: cnt > 1 ? cnt : null,
-        amount_per_unit: item.amountPerUnit ? parseFloat(item.amountPerUnit) : null,
+        quantity: qty,
+        quantity_original: qty,
+        count: apu ? cnt : (cnt > 1 ? cnt : null),
+        amount_per_unit: apu,
         unit: item.unit,
         location: item.location,
         category: item.category || null,
@@ -491,19 +617,19 @@ export default function AddPage() {
 
         {/* ── Header ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-          <a href="/inventory" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Back</a>
+          <a href="/" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Home</a>
           <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '32px', color: '#2d2d2d', margin: 0, flex: 1 }}>Add Item</h1>
-          <a href="/" style={{ color: '#aaa', fontWeight: 700, fontSize: '13px', textDecoration: 'none' }}>📷 Scan receipt</a>
         </div>
 
         {/* ── Mode tabs ── */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '20px', flexWrap: 'wrap' }}>
           {([
             { id: 'manual',  label: '📝 Manual'  },
             { id: 'voice',   label: '🎤 Voice'   },
             { id: 'barcode', label: '📷 Barcode'  },
+            { id: 'receipt', label: '🧾 Receipt'  },
           ] as { id: Mode; label: string }[]).map(tab => (
-            <button key={tab.id} onClick={() => switchMode(tab.id)} style={{ ...btnBase, flex: 1, background: mode === tab.id ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: mode === tab.id ? 'white' : '#888', boxShadow: mode === tab.id ? '0 4px 12px rgba(255,112,67,0.35)' : '0 2px 8px rgba(0,0,0,0.07)', fontSize: '13px', padding: '9px 10px' }}>
+            <button key={tab.id} onClick={() => switchMode(tab.id)} style={{ ...btnBase, flex: '1 1 auto', background: mode === tab.id ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: mode === tab.id ? 'white' : '#888', boxShadow: mode === tab.id ? '0 4px 12px rgba(255,112,67,0.35)' : '0 2px 8px rgba(0,0,0,0.07)', fontSize: '13px', padding: '9px 10px' }}>
               {tab.label}
             </button>
           ))}
@@ -726,14 +852,25 @@ export default function AddPage() {
                 <div style={{ flex: 1 }}>
                   <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Count</label>
                   <input type="number" min={1} step={1} placeholder="1" value={form.itemCount}
-                    onChange={e => updateForm({ itemCount: e.target.value, quantity: e.target.value, quantityOriginal: e.target.value })}
+                    onChange={e => {
+                      const cnt = e.target.value
+                      const apu = parseFloat(form.amountPerUnit)
+                      const qty = apu > 0 ? String((parseInt(cnt) || 1) * apu) : cnt
+                      updateForm({ itemCount: cnt, quantity: qty, quantityOriginal: qty })
+                    }}
                     style={{ ...inputStyle, textAlign: 'center' }} />
                 </div>
                 <span style={{ color: '#ccc', fontWeight: 700, fontSize: '18px', paddingBottom: '11px', flexShrink: 0 }}>×</span>
                 <div style={{ flex: 1 }}>
                   <label style={{ ...labelStyle, fontSize: '10px', marginBottom: '3px' }}>Size each</label>
                   <input type="number" min={0} step={0.1} placeholder="—" value={form.amountPerUnit}
-                    onChange={e => updateForm({ amountPerUnit: e.target.value })}
+                    onChange={e => {
+                      const apu = e.target.value
+                      const apuNum = parseFloat(apu)
+                      const cnt = parseInt(form.itemCount) || 1
+                      const qty = apuNum > 0 ? String(cnt * apuNum) : String(cnt)
+                      updateForm({ amountPerUnit: apu, quantity: qty, quantityOriginal: qty })
+                    }}
                     style={{ ...inputStyle, textAlign: 'center' }} />
                 </div>
                 <div style={{ flex: 2 }}>
@@ -806,6 +943,118 @@ export default function AddPage() {
               {saving ? 'Saving...' : `Save${form.name.trim() ? ` "${form.name.trim()}"` : ''} to Inventory`}
             </button>
           </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════
+            RECEIPT SCANNING MODE
+        ══════════════════════════════════════════════════════════════════ */}
+        {mode === 'receipt' && (
+          <>
+            {receiptStep === 'upload' && (
+              <div style={{ background: 'white', borderRadius: '20px', padding: '28px 24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', textAlign: 'center' }}>
+                <div style={{ fontSize: '56px', marginBottom: '12px' }}>🧾</div>
+                <h2 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '26px', color: '#2d2d2d', margin: '0 0 8px' }}>Scan a Receipt</h2>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#aaa', margin: '0 0 24px', lineHeight: 1.5 }}>
+                  Take a photo of your grocery receipt. AI extracts all items automatically.
+                </p>
+                {receiptPreview && <img src={receiptPreview} alt="Receipt" style={{ maxWidth: '180px', maxHeight: '160px', borderRadius: '16px', marginBottom: '16px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }} />}
+                <label style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '18px', padding: '16px 36px', borderRadius: '50px', cursor: 'pointer', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', display: 'inline-block', position: 'relative' }}>
+                  {receiptLoading ? '✨ Scanning...' : '📷 Choose Receipt Photo'}
+                  <input ref={receiptFileRef} type="file" accept="image/*" capture="environment" onChange={handleReceiptFile} disabled={receiptLoading} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+                </label>
+                {receiptLoading && <p style={{ color: '#ff7043', fontWeight: 700, fontSize: '15px', fontFamily: "'Nunito',sans-serif", marginTop: '12px' }}>AI is reading your receipt…</p>}
+              </div>
+            )}
+
+            {receiptStep === 'reviewing' && (() => {
+              const REVIEW_UNITS = ['g', 'kg', 'ml', 'l', 'item', 'pack', 'bag', 'box', 'bottle', 'tin', 'loaf', 'fillet']
+              const REVIEW_CATS  = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
+              const fs: React.CSSProperties = { border: '2px solid #eee', borderRadius: '8px', padding: '7px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: 'white' }
+              return (
+                <>
+                  <div style={{ marginBottom: '16px' }}>
+                    <h2 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '26px', color: '#2d2d2d', margin: '0 0 4px' }}>Review Items</h2>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#888', margin: '0 0 4px' }}>From {receiptRetailer} — edit anything wrong</p>
+                    {receiptTotal && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: '14px', color: '#ff7043', margin: 0 }}>Total: £{receiptTotal.toFixed(2)}</p>}
+                  </div>
+
+                  {/* Voice expiry */}
+                  <div style={{ marginBottom: '16px' }}>
+                    <button onClick={startReceiptVoiceExpiry} disabled={rVoiceListening || rVoiceProcessing}
+                      style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '10px', background: rVoiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 16px rgba(255,112,67,0.35)', opacity: rVoiceProcessing ? 0.7 : 1 }}>
+                      <span style={{ fontSize: '18px', animation: rVoiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
+                      {rVoiceListening ? 'Listening...' : rVoiceProcessing ? 'Understanding...' : 'Set expiry dates by voice'}
+                    </button>
+                    {rVoiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '6px 0 0' }}>😕 {rVoiceError}</p>}
+                    {rVoiceFilled.length > 0 && (
+                      <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '12px', padding: '10px 14px', marginTop: '10px' }}>
+                        <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#388e3c', margin: '0 0 6px' }}>✅ {rVoiceFilled.length} expiry date{rVoiceFilled.length !== 1 ? 's' : ''} filled in</p>
+                        {rVoiceFilled.map((f, i) => <p key={i} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#555', margin: '2px 0' }}>{f.name} → {new Date(f.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p>)}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Item cards */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+                    {receiptItems.map((item, index) => {
+                      function upd(patch: Partial<ReviewItem>) {
+                        const next = [...receiptItems]; next[index] = { ...next[index], ...patch }; setReceiptItems(next)
+                      }
+                      const safeUnit = REVIEW_UNITS.includes(item.unit) ? item.unit : 'g'
+                      return (
+                        <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: item.confidence < 0.8 ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                            <input type="checkbox" checked={item.selected} onChange={e => upd({ selected: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ff7043', flexShrink: 0 }} />
+                            <input type="text" value={item.normalized_name} onChange={e => upd({ normalized_name: e.target.value })} style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '8px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', minWidth: 0 }} />
+                            {item.confidence < 0.8 && <span style={{ background: 'rgba(255,179,71,0.15)', color: '#e08000', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⚠ low</span>}
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '8px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <input type="number" min={1} step={1} value={item.quantity} onChange={e => upd({ quantity: Number(e.target.value) })} style={{ ...fs, width: '52px', textAlign: 'center' }} title="Count" />
+                              <span style={{ color: '#ccc', fontWeight: 700, fontSize: '14px' }}>×</span>
+                              <input type="number" min={0} step={0.1} value={item.amount_per_unit ?? ''} placeholder="amt" onChange={e => upd({ amount_per_unit: e.target.value !== '' ? Number(e.target.value) : null })} style={{ ...fs, width: '60px', textAlign: 'center', color: item.amount_per_unit ? '#2d2d2d' : '#bbb' }} title="Amount per unit" />
+                            </div>
+                            <select value={safeUnit} onChange={e => upd({ unit: e.target.value })} style={fs}>
+                              {REVIEW_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: 'auto' }}>
+                              <span style={{ color: '#bbb', fontWeight: 700, fontSize: '13px', fontFamily: "'Nunito',sans-serif" }}>£</span>
+                              <input type="number" min={0} step={0.01} value={item.price ?? ''} placeholder="—" onChange={e => upd({ price: e.target.value !== '' ? Number(e.target.value) : null })} style={{ ...fs, width: '70px', color: '#ff7043', textAlign: 'right' }} />
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: item.location !== 'household' ? '8px' : '0' }}>
+                            <select value={item.location} onChange={e => upd({ location: e.target.value as StorageLocation })} style={{ ...fs, flex: 1 }}>
+                              <option value="fridge">❄️ Fridge</option><option value="freezer">🧊 Freezer</option><option value="cupboard">🗄️ Cupboard</option><option value="household">🏠 Household</option><option value="other">📦 Other</option>
+                            </select>
+                            <select value={item.category || ''} onChange={e => upd({ category: e.target.value || null })} style={{ ...fs, flex: 1 }}>
+                              <option value="">— category —</option>{REVIEW_CATS.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </div>
+                          {item.location !== 'household' && <input type="date" value={item.expiry_date || ''} onChange={e => upd({ expiry_date: e.target.value || null })} style={{ ...fs, color: item.expiry_date ? '#2d2d2d' : '#bbb' }} />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <button onClick={handleReceiptSave} style={{ width: '100%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '20px', padding: '16px', borderRadius: '50px', border: 'none', cursor: 'pointer', boxShadow: '0 8px 24px rgba(255,112,67,0.4)' }}>
+                    Save {receiptItems.filter(i => i.selected).length} Items to Inventory
+                  </button>
+                </>
+              )
+            })()}
+
+            {receiptStep === 'done' && (
+              <div style={{ textAlign: 'center', padding: '40px 24px' }}>
+                <div style={{ fontSize: '64px', marginBottom: '16px' }}>🎉</div>
+                <h2 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '36px', color: '#2d2d2d', margin: '0 0 8px' }}>Items Saved!</h2>
+                <p style={{ color: '#888', fontWeight: 700, fontSize: '16px', margin: '0 0 8px', fontFamily: "'Nunito',sans-serif" }}>{receiptItems.filter(i => i.selected).length} items added to inventory</p>
+                {receiptTotal && <p style={{ color: '#ff7043', fontWeight: 800, fontSize: '18px', margin: '0 0 32px', fontFamily: "'Nunito',sans-serif" }}>Total spend: £{receiptTotal.toFixed(2)}</p>}
+                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <button onClick={() => { setReceiptStep('upload'); setReceiptPreview(null); setReceiptItems([]) }} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '12px 28px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)' }}>Scan Another</button>
+                  <a href="/inventory" style={{ ...btnBase, background: 'white', color: '#ff7043', fontSize: '16px', padding: '12px 28px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', textDecoration: 'none' }}>View Inventory</a>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
       </div>

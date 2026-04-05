@@ -3,6 +3,27 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* Default theme = warm */
+  --page-bg: linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%);
+  --page-bg-solid: #fdf6ec;
+}
+
+/* ── Themes ──────────────────────────────────────────────────────── */
+[data-theme="warm"] {
+  --page-bg: linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%);
+  --page-bg-solid: #fdf6ec;
+}
+[data-theme="light"] {
+  --page-bg: linear-gradient(160deg, #fafafa 0%, #f2f2f2 100%);
+  --page-bg-solid: #fafafa;
+}
+[data-theme="sage"] {
+  --page-bg: linear-gradient(135deg, #f2f7f2 0%, #d8edda 50%, #c8e6cc 100%);
+  --page-bg-solid: #f2f7f2;
+}
+[data-theme="dark"] {
+  --page-bg: linear-gradient(135deg, #1c1c2e 0%, #252540 50%, #1c1c2e 100%);
+  --page-bg-solid: #1c1c2e;
 }
 
 @theme inline {
@@ -12,15 +33,13 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
+  background: var(--page-bg-solid);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Override every page's inline background with the active theme */
+main {
+  background: var(--page-bg) !important;
 }

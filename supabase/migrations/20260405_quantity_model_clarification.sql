@@ -1,0 +1,38 @@
+-- ============================================================
+-- ShelfSense — Quantity model clarification (no schema change)
+-- ============================================================
+--
+-- This migration documents the corrected quantity model.
+-- No schema columns are added or removed.
+--
+-- QUANTITY MODEL (v2):
+--   quantity          = total trackable amount in base unit
+--                       e.g. 6×330ml → quantity=1980, unit='ml'
+--                       e.g. 1×750ml → quantity=750,  unit='ml'
+--                       e.g. 3 items  → quantity=3,   unit='item'
+--
+--   quantity_original = same value at time of purchase
+--
+--   count             = number of packs (NULL if 1 pack with no amountPerUnit)
+--                       saved as non-null when amountPerUnit is set
+--                       e.g. 6×330ml → count=6
+--                       e.g. 1×750ml → count=1
+--
+--   amount_per_unit   = size of each pack (e.g. 330 for 330ml cans)
+--
+--   unit              = measurement unit for amount_per_unit (ml, g, etc.)
+--
+-- DISPLAY RULES:
+--   - count>1 && apu:  "6 × 330 ml"  (or "1320 of 1980 ml" if partially used)
+--   - count=1 && apu:  "750 ml"       (or "375 of 750 ml" if partially used)
+--   - no apu:          "3 items"      (or "2 of 3 items" if partially used)
+--
+-- PREVIOUS BEHAVIOUR (v1 - BROKEN):
+--   quantity was set to count only (=1 for single bottles)
+--   amount_per_unit was stored but not factored into quantity
+--   Caused "use some" to show "of 1 remaining" for 750ml bottles
+--
+-- No SQL action needed — only code changes in add/page.tsx, inventory/page.tsx
+-- ============================================================
+
+SELECT 'Quantity model v2 - documentation only' AS status;
