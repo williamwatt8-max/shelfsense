@@ -20,28 +20,38 @@ function mapCategory(tags: string[] = []): string {
   return 'other'
 }
 
-// Parses Open Food Facts quantity string like "750 ml", "6 x 330 ml", "500 g"
-function parseQuantityString(raw: string): { quantity: number; unit: string } {
-  if (!raw) return { quantity: 1, unit: 'item' }
+// Parses Open Food Facts quantity string into count + amount_per_unit + unit.
+// Examples:
+//   "6 x 330 ml"  → { count: 6, amount_per_unit: 330, unit: 'ml' }
+//   "750 ml"      → { count: 1, amount_per_unit: 750, unit: 'ml' }
+//   "500 g"       → { count: 1, amount_per_unit: 500, unit: 'g' }
+//   "12"          → { count: 12, amount_per_unit: null, unit: 'item' }
+function parseProductQuantity(raw: string): { count: number; amount_per_unit: number | null; unit: string } {
+  if (!raw) return { count: 1, amount_per_unit: null, unit: 'item' }
   const s = raw.toLowerCase().trim()
 
-  // Handle "N x Q unit" → use individual quantity
+  // "N x Q unit" — pack of N, each Q units
   const multi = s.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*(ml|l|g|kg|cl)/i)
-  if (multi) return { quantity: parseFloat(multi[2]), unit: multi[3].toLowerCase() }
-
-  // Handle "Q unit"
-  const simple = s.match(/(\d+(?:[.,]\d+)?)\s*(ml|l|g|kg|cl|oz|fl oz)/i)
-  if (simple) {
-    const unit = simple[2].toLowerCase().replace('cl', 'ml')
-    const q = unit === 'cl' ? parseFloat(simple[1]) * 10 : parseFloat(simple[1].replace(',', '.'))
-    return { quantity: q, unit: unit === 'fl oz' ? 'ml' : unit }
+  if (multi) {
+    const unit = multi[3].toLowerCase() === 'cl' ? 'ml' : multi[3].toLowerCase()
+    const amt  = multi[3].toLowerCase() === 'cl' ? parseFloat(multi[2]) * 10 : parseFloat(multi[2])
+    return { count: parseInt(multi[1]), amount_per_unit: amt, unit }
   }
 
-  // Handle "N items" (pack size)
-  const count = s.match(/^(\d+)\s*(pack|pieces|pcs|tabs|tablets|sachets|bags)?$/)
-  if (count) return { quantity: parseInt(count[1]), unit: count[2] ? 'pack' : 'item' }
+  // "Q unit" — single item with a measured size
+  const simple = s.match(/(\d+(?:[.,]\d+)?)\s*(ml|l|g|kg|cl|oz)/i)
+  if (simple) {
+    const rawUnit = simple[2].toLowerCase()
+    const unit = rawUnit === 'cl' ? 'ml' : rawUnit === 'oz' ? 'g' : rawUnit
+    const amt  = rawUnit === 'cl' ? parseFloat(simple[1]) * 10 : parseFloat(simple[1].replace(',', '.'))
+    return { count: 1, amount_per_unit: amt, unit }
+  }
 
-  return { quantity: 1, unit: 'item' }
+  // "N" alone — treat as a pack count (e.g. "12" for 12-pack)
+  const countOnly = s.match(/^(\d+)\s*(pack|pieces|pcs|tabs|tablets|sachets|bags)?$/)
+  if (countOnly) return { count: parseInt(countOnly[1]), amount_per_unit: null, unit: countOnly[2] ? 'pack' : 'item' }
+
+  return { count: 1, amount_per_unit: null, unit: 'item' }
 }
 
 export async function POST(req: NextRequest) {
@@ -65,7 +75,7 @@ export async function POST(req: NextRequest) {
     }
 
     const p = data.product
-    const { quantity, unit } = parseQuantityString(p.quantity || '')
+    const { count, amount_per_unit, unit } = parseProductQuantity(p.quantity || '')
     const category = mapCategory(p.categories_tags || [])
 
     return NextResponse.json({
@@ -73,7 +83,8 @@ export async function POST(req: NextRequest) {
       name: p.product_name || '',
       brand: p.brands || null,
       category,
-      quantity,
+      count,
+      amount_per_unit,
       unit,
       image_url: p.image_front_url || null,
     })

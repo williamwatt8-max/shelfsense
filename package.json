@@ -12,6 +12,7 @@
     "@anthropic-ai/sdk": "^0.80.0",
     "@supabase/ssr": "^0.10.0",
     "@supabase/supabase-js": "^2.100.1",
+    "@zxing/browser": "^0.1.5",
     "date-fns": "^4.1.0",
     "lucide-react": "^1.7.0",
     "next": "16.2.1",

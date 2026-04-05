@@ -79,26 +79,23 @@ export default function AddPage() {
   const [voiceFilled,      setVoiceFilled]      = useState(false)
 
   // ── Barcode batch state ───────────────────────────────────────────────────
-  const [barcodePhase,      setBarcodePhase]     = useState<BarcodePhase>('idle')
-  const [batchItems,        setBatchItems]       = useState<BatchItem[]>([])
-  const [cameraSupported,   setCameraSupported]  = useState<boolean | null>(null)
-  const [cameraActive,      setCameraActive]     = useState(false)
-  const [scanFlash,         setScanFlash]        = useState(false)
-  const [batchSaving,       setBatchSaving]      = useState(false)
-  const [photoScanning,     setPhotoScanning]    = useState(false) // iOS fallback
+  const [barcodePhase,  setBarcodePhase]  = useState<BarcodePhase>('idle')
+  const [batchItems,    setBatchItems]    = useState<BatchItem[]>([])
+  const [cameraActive,  setCameraActive]  = useState(false)
+  const [cameraError,   setCameraError]   = useState<string | null>(null)
+  const [scanFlash,     setScanFlash]     = useState(false)
+  const [batchSaving,   setBatchSaving]   = useState(false)
 
   // Camera refs
-  const videoRef         = useRef<HTMLVideoElement>(null)
-  const streamRef        = useRef<MediaStream | null>(null)
-  const scanIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
-  const photoInputRef    = useRef<HTMLInputElement>(null)
+  const videoRef        = useRef<HTMLVideoElement>(null)
+  const streamRef       = useRef<MediaStream | null>(null)
+  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Scan debounce refs (avoid re-scanning same barcode instantly)
-  const lastBarcodeRef   = useRef('')
-  const lastScanTimeRef  = useRef(0)
+  const lastBarcodeRef  = useRef('')
+  const lastScanTimeRef = useRef(0)
 
   useEffect(() => {
-    setCameraSupported(typeof window !== 'undefined' && 'BarcodeDetector' in window)
     return () => stopCamera()
   }, [])
 
@@ -164,9 +161,11 @@ export default function AddPage() {
         const r = await res.json()
         if (r.error) throw new Error(r.error)
         setForm({
-          name: r.name || '', itemCount: String(r.count ?? 1),
+          name: r.name || '',
+          itemCount: String(r.count ?? 1),
           amountPerUnit: r.amount_per_unit != null ? String(r.amount_per_unit) : '',
-          quantity: String(r.quantity ?? 1), quantityOriginal: String(r.quantity_original ?? r.quantity ?? 1),
+          quantity: String(r.quantity ?? r.amount_per_unit ?? 1),
+          quantityOriginal: String(r.quantity_original ?? r.quantity ?? r.amount_per_unit ?? 1),
           unit: r.unit || 'item', location: (r.location as StorageLocation) || suggestLocation(r.name || '', r.category || ''),
           category: r.category || '', expiryDate: r.expiry_date || '', retailer: r.retailer || '',
           purchaseDate: '', opened: !!r.opened_at, openedAt: r.opened_at || '',
@@ -215,26 +214,64 @@ export default function AddPage() {
   // ── Barcode — camera ───────────────────────────────────────────────────────
 
   async function startCamera() {
-    const BarcodeDetector = (window as any).BarcodeDetector
-    if (!BarcodeDetector || !navigator.mediaDevices?.getUserMedia) { setCameraSupported(false); return }
+    setCameraError(null)
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera not available on this device or browser.")
+      return
+    }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      })
       streamRef.current = stream
       setCameraActive(true)
       setBarcodePhase('scanning')
-      setTimeout(() => {
-        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play().catch(() => {}) }
-      }, 100)
-      const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] })
-      scanIntervalRef.current = setInterval(async () => {
-        if (!videoRef.current || videoRef.current.readyState < 2) return
-        try {
-          const codes = await detector.detect(videoRef.current)
-          if (codes.length > 0) addToBatch(codes[0].rawValue)
-        } catch {}
-      }, 500)
+
+      // Wait for React to render the <video> element before assigning srcObject
+      await new Promise<void>(r => setTimeout(r, 80))
+      if (!videoRef.current) return
+      videoRef.current.srcObject = stream
+      await videoRef.current.play().catch(() => {})
+
+      const NativeBarcodeDetector = (window as any).BarcodeDetector
+
+      if (NativeBarcodeDetector) {
+        // ── Chrome / Android: native BarcodeDetector ────────────────────────
+        const detector = new NativeBarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'],
+        })
+        scanIntervalRef.current = setInterval(async () => {
+          const vid = videoRef.current
+          if (!vid || vid.readyState < 2) return
+          try {
+            const codes = await detector.detect(vid)
+            if (codes.length > 0) addToBatch(codes[0].rawValue)
+          } catch {}
+        }, 500)
+      } else {
+        // ── iOS Safari / other: @zxing/browser canvas polling ───────────────
+        const { BrowserMultiFormatReader } = await import('@zxing/browser')
+        const zxReader = new BrowserMultiFormatReader()
+        const zxCanvas = document.createElement('canvas')
+        const zxCtx    = zxCanvas.getContext('2d')!
+
+        scanIntervalRef.current = setInterval(async () => {
+          const vid = videoRef.current
+          if (!vid || vid.readyState < 2 || !vid.videoWidth) return
+          zxCanvas.width  = vid.videoWidth
+          zxCanvas.height = vid.videoHeight
+          zxCtx.drawImage(vid, 0, 0)
+          try {
+            // BrowserMultiFormatReader.decode() accepts HTMLCanvasElement
+            const result = await (zxReader as any).decode(zxCanvas)
+            if (result?.getText) addToBatch(result.getText())
+          } catch {
+            // NotFoundException is normal when no barcode is visible in frame
+          }
+        }, 500)
+      }
     } catch {
-      alert("Couldn't access camera. Check camera permissions and try again.")
+      setCameraError("Couldn't access camera. Check that camera permission is allowed for this site.")
       setCameraActive(false)
     }
   }
@@ -248,25 +285,6 @@ export default function AddPage() {
   function finishScanning() {
     stopCamera()
     setBarcodePhase(batchItems.length > 0 ? 'reviewing' : 'idle')
-  }
-
-  // ── Barcode — iOS photo fallback ───────────────────────────────────────────
-
-  async function capturePhoto(file: File) {
-    setPhotoScanning(true)
-    try {
-      const fd = new FormData()
-      fd.append('image', file)
-      const res = await fetch('/api/barcode-image', { method: 'POST', body: fd })
-      const result = await res.json()
-      if (result.found && result.barcode) {
-        await addToBatch(result.barcode)
-        setBarcodePhase('scanning') // stay in "scanning" to allow more photos
-      } else {
-        alert("Couldn't read a barcode from the photo — try better lighting.")
-      }
-    } catch { alert('Photo scan failed — try again.') }
-    setPhotoScanning(false)
   }
 
   // ── Barcode — batch add / lookup ───────────────────────────────────────────
@@ -283,14 +301,19 @@ export default function AddPage() {
     // Visual flash
     setScanFlash(true); setTimeout(() => setScanFlash(false), 280)
 
-    // Duplicate barcode — just increment count
-    const existIdx = batchItems.findIndex(i => i.barcode === barcode)
-    if (existIdx !== -1) {
-      setBatchItems(prev => prev.map((item, i) =>
-        i === existIdx ? { ...item, count: String(parseInt(item.count) + 1) } : item
-      ))
-      return
-    }
+    // Duplicate barcode — increment count using functional update (always reads latest state)
+    let isDuplicate = false
+    setBatchItems(prev => {
+      const existIdx = prev.findIndex(i => i.barcode === barcode)
+      if (existIdx !== -1) {
+        isDuplicate = true
+        return prev.map((item, i) =>
+          i === existIdx ? { ...item, count: String(parseInt(item.count) + 1) } : item
+        )
+      }
+      return prev
+    })
+    if (isDuplicate) return
 
     // New barcode — add placeholder row, then look up in background
     const id = `${barcode}-${now}`
@@ -313,6 +336,8 @@ export default function AddPage() {
           return {
             ...item,
             name: result.name,
+            // API now returns count + amount_per_unit (not quantity)
+            count: result.count != null && result.count > 1 ? String(result.count) : item.count,
             amountPerUnit: result.amount_per_unit != null ? String(result.amount_per_unit) : '',
             unit: result.unit || 'item',
             category: result.category || '',
@@ -482,69 +507,43 @@ export default function AddPage() {
                   Scan Your Shopping
                 </h2>
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#aaa', margin: '0 0 24px', lineHeight: 1.5 }}>
-                  Scan multiple barcodes in one session. Each item goes into a review list — edit and save together.
+                  Point the camera at each barcode. Items are added to a list — review and save together.
                 </p>
-
-                {cameraSupported === null && (
-                  <p style={{ color: '#ccc', fontWeight: 700, fontSize: '13px', fontFamily: "'Nunito',sans-serif" }}>Checking camera support...</p>
+                {cameraError && (
+                  <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '0 0 16px' }}>
+                    ⚠ {cameraError}
+                  </p>
                 )}
-
-                {cameraSupported && (
-                  <button
-                    onClick={startCamera}
-                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '18px', padding: '16px 40px', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', fontFamily: "'Fredoka One',cursive", display: 'inline-flex', alignItems: 'center', gap: '10px' }}
-                  >
-                    <span style={{ fontSize: '24px' }}>📷</span> Start Scanning
-                  </button>
-                )}
-
-                {cameraSupported === false && (
-                  <>
-                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 14px' }}>
-                      Live scanning not available on this device — take a photo of each barcode instead.
-                    </p>
-                    <label style={{ ...btnBase, background: photoScanning ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: photoScanning ? '#bbb' : 'white', fontSize: '16px', padding: '14px 32px', cursor: photoScanning ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '10px', boxShadow: photoScanning ? 'none' : '0 6px 20px rgba(255,112,67,0.35)', boxSizing: 'border-box' as const }}>
-                      <span style={{ fontSize: '22px' }}>📷</span>
-                      {photoScanning ? 'Reading...' : 'Take Photo of Barcode'}
-                      <input ref={photoInputRef} type="file" accept="image/*" capture="environment" disabled={photoScanning}
-                        onChange={e => { const f = e.target.files?.[0]; if (f) capturePhoto(f); e.target.value = '' }}
-                        style={{ display: 'none' }} />
-                    </label>
-                  </>
-                )}
+                <button
+                  onClick={startCamera}
+                  style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '18px', padding: '16px 40px', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', fontFamily: "'Fredoka One',cursive", display: 'inline-flex', alignItems: 'center', gap: '10px' }}
+                >
+                  <span style={{ fontSize: '24px' }}>📷</span> Start Scanning
+                </button>
               </div>
             )}
 
             {/* ── Phase: scanning ── */}
             {barcodePhase === 'scanning' && (
               <>
-                {/* Camera viewfinder */}
-                {cameraActive && (
-                  <div style={{ background: '#000', borderRadius: '16px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
-                    <video ref={videoRef} muted playsInline style={{ width: '100%', maxHeight: '280px', objectFit: 'cover', display: 'block' }} />
-                    {/* Animated scan line */}
-                    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
-                      <div style={{ position: 'absolute', left: '8%', right: '8%', height: '2px', background: 'rgba(255,112,67,0.9)', animation: 'scan-line 2s ease-in-out infinite', boxShadow: '0 0 8px rgba(255,112,67,0.8)', borderRadius: '2px' }} />
+                {/* Camera viewfinder — embedded live scanner, always visible */}
+                <div style={{ background: '#000', borderRadius: '16px', overflow: 'hidden', marginBottom: '14px', position: 'relative' }}>
+                  <video ref={videoRef} muted playsInline style={{ width: '100%', maxHeight: '280px', objectFit: 'cover', display: 'block' }} />
+                  {/* Animated scan line */}
+                  <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+                    <div style={{ position: 'absolute', left: '8%', right: '8%', height: '2px', background: 'rgba(255,112,67,0.9)', animation: 'scan-line 2s ease-in-out infinite', boxShadow: '0 0 8px rgba(255,112,67,0.8)', borderRadius: '2px' }} />
+                  </div>
+                  {/* Corner brackets */}
+                  <div style={{ position: 'absolute', inset: '12px', pointerEvents: 'none', border: '2px solid rgba(255,112,67,0.4)', borderRadius: '10px' }} />
+                  {/* Flash overlay on successful scan */}
+                  {scanFlash && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.7)', animation: 'scan-flash 0.28s ease-out forwards', borderRadius: '16px' }} />}
+                  {/* Starting indicator */}
+                  {!cameraActive && (
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.6)' }}>
+                      <p style={{ color: 'white', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px' }}>Starting camera…</p>
                     </div>
-                    {/* Corner brackets */}
-                    <div style={{ position: 'absolute', inset: '12px', pointerEvents: 'none', border: '2px solid rgba(255,112,67,0.4)', borderRadius: '10px' }} />
-                    {/* Flash overlay */}
-                    {scanFlash && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.7)', animation: 'scan-flash 0.28s ease-out forwards', borderRadius: '16px' }} />}
-                  </div>
-                )}
-
-                {/* iOS: photo scan when camera not available */}
-                {!cameraActive && cameraSupported === false && (
-                  <div style={{ background: 'white', borderRadius: '16px', padding: '20px', marginBottom: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', textAlign: 'center' }}>
-                    <label style={{ ...btnBase, background: photoScanning ? '#eee' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: photoScanning ? '#bbb' : 'white', fontSize: '16px', padding: '14px 28px', cursor: photoScanning ? 'default' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '10px', boxShadow: photoScanning ? 'none' : '0 6px 20px rgba(255,112,67,0.35)', boxSizing: 'border-box' as const }}>
-                      <span style={{ fontSize: '22px' }}>📷</span>
-                      {photoScanning ? 'Reading barcode...' : 'Scan Another Barcode'}
-                      <input ref={photoInputRef} type="file" accept="image/*" capture="environment" disabled={photoScanning}
-                        onChange={e => { const f = e.target.files?.[0]; if (f) capturePhoto(f); e.target.value = '' }}
-                        style={{ display: 'none' }} />
-                    </label>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {/* Scanned count header */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>

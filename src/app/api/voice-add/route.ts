@@ -22,6 +22,8 @@ The user said: "${transcript}"
 Extract as much detail as possible. Return ONLY raw JSON — no markdown, no code fences:
 {
   "name": "clear product name",
+  "count": 1,
+  "amount_per_unit": null,
   "quantity": 1,
   "quantity_original": 1,
   "unit": "item",
@@ -35,8 +37,17 @@ Extract as much detail as possible. Return ONLY raw JSON — no markdown, no cod
 
 RULES:
 - name: normalise to a clear product name (e.g. "Semi-Skimmed Milk", "Cheddar Cheese")
-- quantity: the CURRENT remaining amount (if user says "half a bottle" → 0.5; "three quarters full" → 0.75; "about 300ml left" → 300)
-- quantity_original: the original full amount (if "half a bottle of 750ml" → 750; if unclear but unit is bottle/pack/item → 1; if exact quantity stated with no "of" → same as quantity)
+- count: number of individual packs/units (e.g. "6 cans" → 6; "a bottle" → 1; default 1)
+- amount_per_unit: size of each individual unit as a plain number, null if unknown
+    "6 cans of 330ml" → count=6, amount_per_unit=330, unit="ml"
+    "a 750ml bottle of wine" → count=1, amount_per_unit=750, unit="ml"
+    "500g of chicken" → count=1, amount_per_unit=500, unit="g"
+    "some pasta" → count=1, amount_per_unit=null, unit="item"
+- quantity: the CURRENT remaining amount expressed in the same unit
+    "half a bottle of 750ml wine" → quantity=375, quantity_original=750, unit="ml"
+    "about 300ml left" → quantity=300, unit="ml"
+    if amount is fully intact → quantity = count (if count > 1) or amount_per_unit (if known) or 1
+- quantity_original: original full amount; if fully intact, same as quantity
 - unit: item | g | kg | ml | l | bottle | tin | loaf | pack | bag | head | fillet
 - location: infer from item type — fridge (dairy, meat, fish, fresh produce), freezer (frozen), household (cleaning, toiletries), cupboard (default)
 - category: dairy | meat | fish | vegetables | fruit | bakery | tinned | dry goods | oils | frozen | drinks | snacks | alcohol | household | other
@@ -51,10 +62,13 @@ RULES:
 
 Examples:
 "I've got milk, about half a bottle left, use by Friday" →
-  name="Semi-Skimmed Milk", quantity=0.5, quantity_original=1, unit="bottle", location="fridge", category="dairy", expiry_date="<next friday>", opened_at=null
+  name="Semi-Skimmed Milk", count=1, amount_per_unit=1000, quantity=500, quantity_original=1000, unit="ml", location="fridge", category="dairy"
+
+"Six cans of Coke, 330ml each" →
+  name="Coca-Cola", count=6, amount_per_unit=330, quantity=6, quantity_original=6, unit="ml", location="cupboard", category="drinks"
 
 "Add cheddar cheese, 300 grams, opened two days ago" →
-  name="Cheddar Cheese", quantity=300, quantity_original=300, unit="g", location="fridge", category="dairy", opened_at="<today - 2>"
+  name="Cheddar Cheese", count=1, amount_per_unit=300, quantity=300, quantity_original=300, unit="g", location="fridge", category="dairy", opened_at="<today - 2>"
 
 "I've got washing up liquid and kitchen roll in the cupboard" →
   [Note: return the FIRST item — name="Washing Up Liquid", location="household"]`
