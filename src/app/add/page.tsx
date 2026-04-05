@@ -208,6 +208,7 @@ export default function AddPage() {
       name: form.name.trim(),
       count: form.amountPerUnit ? (parseInt(form.itemCount) || 1) : ((parseInt(form.itemCount) || 1) > 1 ? parseInt(form.itemCount) : null),
       amount_per_unit: form.amountPerUnit ? parseFloat(form.amountPerUnit) : null,
+      remaining_quantity: qty,
       quantity: qty,
       quantity_original: parseFloat(form.quantityOriginal) || qty,
       unit: form.unit,
@@ -324,7 +325,7 @@ export default function AddPage() {
         const apuVal = apu(item)
         const qty = apuVal && cnt ? cnt * apuVal : apuVal ? apuVal : item.quantity
         return {
-          name: item.normalized_name, quantity: qty, quantity_original: qty,
+          name: item.normalized_name, remaining_quantity: qty, quantity: qty, quantity_original: qty,
           count: apuVal ? (cnt ?? 1) : cnt,
           amount_per_unit: apuVal, unit: item.unit,
           location: item.location, category: item.category || null,
@@ -512,6 +513,7 @@ export default function AddPage() {
       const qty = apu ? cnt * apu : cnt
       return {
         name: item.name.trim() || item.barcode,
+        remaining_quantity: qty,
         quantity: qty,
         quantity_original: qty,
         count: apu ? cnt : (cnt > 1 ? cnt : null),

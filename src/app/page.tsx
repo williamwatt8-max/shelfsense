@@ -18,7 +18,7 @@ export default function Home() {
     if (!userId) { setLoading(false); return }
 
     const [inventoryRes, shoppingRes] = await Promise.all([
-      supabase.from('inventory_items').select('id,name,quantity,quantity_original,count,amount_per_unit,unit,expiry_date,opened_at,location,category,created_at').eq('user_id', userId).eq('status', 'active').order('expiry_date', { ascending: true, nullsFirst: false }),
+      supabase.from('inventory_items').select('id,name,remaining_quantity,quantity,quantity_original,count,amount_per_unit,unit,expiry_date,opened_at,location,category,created_at').eq('user_id', userId).eq('status', 'active').order('expiry_date', { ascending: true, nullsFirst: false }),
       supabase.from('shopping_list_items').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('checked', false),
     ])
     setItems((inventoryRes.data || []) as InventoryItem[])
@@ -50,9 +50,17 @@ export default function Home() {
 
   function fmtQty(item: InventoryItem): string {
     const fmt = (n: number) => n % 1 === 0 ? String(n) : n.toFixed(1)
-    if (item.count && item.count > 1 && item.amount_per_unit) return `${item.count}×${item.amount_per_unit}${item.unit}`
-    if (item.amount_per_unit) return `${item.amount_per_unit} ${item.unit}`
-    return `${fmt(item.quantity)} ${item.unit}`
+    const rem = item.remaining_quantity ?? item.quantity
+    const packTotal = (item.count && item.amount_per_unit) ? item.count * item.amount_per_unit : item.amount_per_unit
+    if (item.count && item.count > 1 && item.amount_per_unit) {
+      if (rem < packTotal! - 0.001) return `${fmt(rem)} of ${fmt(packTotal!)} ${item.unit} remaining`
+      return `${item.count}×${item.amount_per_unit} ${item.unit}`
+    }
+    if (item.amount_per_unit) {
+      if (rem < item.amount_per_unit - 0.001) return `${fmt(rem)} of ${fmt(item.amount_per_unit)} ${item.unit} remaining`
+      return `${item.amount_per_unit} ${item.unit}`
+    }
+    return `${fmt(rem)} ${item.unit}`
   }
 
   const expiringSoon  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d <= 7 })

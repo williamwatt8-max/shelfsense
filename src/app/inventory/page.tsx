@@ -160,7 +160,7 @@ export default function InventoryPage() {
       await supabase.from('inventory_items').update({ status: 'used' }).eq('id', usingItem.id)
       await supabase.from('inventory_events').insert({ inventory_item_id: usingItem.id, type: 'used', quantity_delta: -usingItem.maxQty })
     } else {
-      const upd: Record<string, any> = { quantity: remaining }
+      const upd: Record<string, any> = { remaining_quantity: remaining, quantity: remaining }
       if (autoOpen) upd.opened_at = today
       await supabase.from('inventory_items').update(upd).eq('id', usingItem.id)
       await supabase.from('inventory_events').insert({ inventory_item_id: usingItem.id, type: 'used_some', quantity_delta: -used })
@@ -178,13 +178,15 @@ export default function InventoryPage() {
 
   async function saveEdit() {
     if (!editingItem) return
+    const editQty = parseFloat(editingItem.quantity) || 0
     await supabase.from('inventory_items').update({
       name: editingItem.name.trim(),
       category: editingItem.category || null,
       location: editingItem.location,
       count: editingItem.itemCount ? parseInt(editingItem.itemCount) : null,
       amount_per_unit: editingItem.amount_per_unit ? parseFloat(editingItem.amount_per_unit) : null,
-      quantity: parseFloat(editingItem.quantity) || 0,
+      remaining_quantity: editQty,
+      quantity: editQty,
       unit: editingItem.unit,
       expiry_date: editingItem.expiry_date || null,
       opened_at: editingItem.opened_at || null,
@@ -358,12 +360,13 @@ export default function InventoryPage() {
     } else if (voiceAction.action === 'discard') {
       await markDiscarded(item.id)
     } else if (voiceAction.action === 'used_partial' && voiceAction.quantity != null) {
-      const remaining = parseFloat((item.quantity - voiceAction.quantity).toFixed(3))
+      const currentQty = item.remaining_quantity ?? item.quantity
+      const remaining = parseFloat((currentQty - voiceAction.quantity).toFixed(3))
       if (remaining <= 0) {
         await supabase.from('inventory_items').update({ status: 'used' }).eq('id', item.id)
-        await supabase.from('inventory_events').insert({ inventory_item_id: item.id, type: 'used', quantity_delta: -item.quantity })
+        await supabase.from('inventory_events').insert({ inventory_item_id: item.id, type: 'used', quantity_delta: -currentQty })
       } else {
-        await supabase.from('inventory_items').update({ quantity: remaining }).eq('id', item.id)
+        await supabase.from('inventory_items').update({ remaining_quantity: remaining, quantity: remaining }).eq('id', item.id)
         await supabase.from('inventory_events').insert({ inventory_item_id: item.id, type: 'used_some', quantity_delta: -voiceAction.quantity })
       }
       loadItems()
@@ -449,14 +452,15 @@ export default function InventoryPage() {
     const map = new Map<string, GroupedItem>()
     for (const item of arr) {
       const key = item.name.toLowerCase().trim()
+      const rq = item.remaining_quantity ?? item.quantity
       if (map.has(key)) {
         const g = map.get(key)!
-        g.totalQuantity += item.quantity
+        g.totalQuantity += rq
         g.batches.push(item)
         if (item.expiry_date && (!g.nearestExpiry || item.expiry_date < g.nearestExpiry))
           g.nearestExpiry = item.expiry_date
       } else {
-        map.set(key, { name: item.name, totalQuantity: item.quantity, unit: item.unit, location: item.location, category: item.category, nearestExpiry: item.expiry_date, retailer: item.retailer, batches: [item] })
+        map.set(key, { name: item.name, totalQuantity: rq, unit: item.unit, location: item.location, category: item.category, nearestExpiry: item.expiry_date, retailer: item.retailer, batches: [item] })
       }
     }
     return Array.from(map.values()).sort((a, b) => {
@@ -584,7 +588,7 @@ export default function InventoryPage() {
     if (openingItem?.id === item.id) return openingPanel(item)
     return (
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-        <button onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.quantity }); setOpeningItem(null); setEditingItem(null) }} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ {item.opened_at ? 'Use some' : 'Use / Open'}</button>
+        <button onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.remaining_quantity ?? item.quantity }); setOpeningItem(null); setEditingItem(null) }} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ {item.opened_at ? 'Use some' : 'Use / Open'}</button>
         <button onClick={() => markUsed(item.id)} style={{ ...btnBase, background: '#e8f5e9', color: '#388e3c' }}>✅ Used all</button>
         {!item.opened_at && (
           <button onClick={() => { startOpening(item); setEditingItem(null) }} style={{ ...btnBase, background: '#fff3e0', color: '#e65100' }}>📦 Mark opened</button>
@@ -598,7 +602,7 @@ export default function InventoryPage() {
             location: item.location,
             itemCount: String(item.count ?? 1),
             amount_per_unit: item.amount_per_unit != null ? String(item.amount_per_unit) : '',
-            quantity: String(item.quantity),
+            quantity: String(item.remaining_quantity ?? item.quantity),
             unit: item.unit,
             expiry_date: item.expiry_date || '',
             opened_at: item.opened_at || '',
@@ -726,28 +730,29 @@ export default function InventoryPage() {
   const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => {
     const qtyDisplay = (() => {
       const fmt = (n: number) => n % 1 === 0 ? String(n) : n.toFixed(1)
-      const orig = quantityOriginal ?? quantity
-      const hasUsed = orig > quantity + 0.001
+      // `quantity` prop is now remaining_quantity (passed in from item.remaining_quantity ?? item.quantity)
+      const remaining = quantity
+      // Derive the "original total" from purchase structure
+      const packTotal = (itemCount && itemCount > 0 && amountPerUnit)
+        ? itemCount * amountPerUnit
+        : amountPerUnit ?? null
+      const looseTotal = (!amountPerUnit && itemCount) ? itemCount : null
+      const originalTotal = packTotal ?? looseTotal
+
+      // Detect partial use (allow 0.1% float tolerance)
+      const isPartial = originalTotal != null && remaining < originalTotal - 0.001
 
       if (itemCount && itemCount > 1 && amountPerUnit) {
-        // Multi-pack: quantity = count × amountPerUnit (new model)
-        if (hasUsed) return `${fmt(quantity)} of ${fmt(orig)} ${unit}`
+        if (isPartial) return `${fmt(remaining)} of ${fmt(packTotal!)} ${unit} remaining`
         return `${itemCount} × ${amountPerUnit} ${unit}`
       }
       if (amountPerUnit) {
-        // Single pack with known size. quantity ≈ amountPerUnit means new model.
-        // Old model had quantity=1; detect by checking if orig ≈ amountPerUnit.
-        const isNewModel = Math.abs(orig - amountPerUnit) / amountPerUnit < 0.15
-        if (hasUsed) {
-          const displayOrig = isNewModel ? orig : amountPerUnit
-          const displayQty  = isNewModel ? quantity : parseFloat((quantity * amountPerUnit).toFixed(3))
-          return `${fmt(displayQty)} of ${fmt(displayOrig)} ${unit}`
-        }
-        return `${amountPerUnit} ${unit}`
+        if (isPartial) return `${fmt(remaining)} of ${fmt(amountPerUnit)} ${unit} remaining`
+        return `${fmt(amountPerUnit)} ${unit}`
       }
-      // Plain count-only item
-      if (hasUsed) return `${fmt(quantity)} of ${fmt(orig)} ${unit}`
-      return `${fmt(quantity)} ${unit}`
+      // Plain count-based item
+      if (isPartial) return `${fmt(remaining)} of ${fmt(originalTotal!)} ${unit} remaining`
+      return `${fmt(remaining)} ${unit}`
     })()
     return (
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1033,7 +1038,7 @@ export default function InventoryPage() {
                                   <div key={batch.id} style={{ background: 'white', borderRadius: '10px', padding: '10px 12px', border: '1px solid #f0f0f0' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                                       <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>
-                                        Batch {bi + 1} — {batch.quantity} {batch.unit}
+                                        Batch {bi + 1} — {batch.remaining_quantity ?? batch.quantity} {batch.unit}
                                         {batch.price != null && <span style={{ color: '#d4a96e', marginLeft: '6px' }}>£{batch.price.toFixed(2)}</span>}
                                       </span>
                                       <ExpiryBadge d={bd} location={batch.location} />
@@ -1073,7 +1078,7 @@ export default function InventoryPage() {
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
-                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}

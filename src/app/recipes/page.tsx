@@ -44,7 +44,7 @@ function toBase(qty: number, unit: string): { qty: number; unit: string } {
 // Total available from an inventory item in its base unit.
 // With the new quantity model, quantity already = count × amount_per_unit (total amount).
 function availableBase(item: InventoryItem): { qty: number; unit: string } {
-  return toBase(item.quantity, item.unit)
+  return toBase(item.remaining_quantity ?? item.quantity, item.unit)
 }
 
 function normalizeForMatch(s: string): string {

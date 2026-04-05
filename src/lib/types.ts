@@ -31,20 +31,22 @@ export type InventoryItem = {
   id: string
   user_id: string | null
   receipt_item_id: string | null
-  // How the item was added to inventory
   source: InventorySource
   name: string
-  // quantity = current remaining; quantity_original = amount at first save
-  quantity: number
-  quantity_original: number | null
-  // count = number of individual units (e.g. 6 cans); amount_per_unit = size of each (e.g. 330 ml)
+  // ── Quantity model ────────────────────────────────────────────────────────
+  // remaining_quantity = how much is left right now (canonical)
+  // quantity / quantity_original = legacy fields kept for backward compat
+  remaining_quantity: number | null   // e.g. 990 (ml left after using 2 cans)
+  quantity: number                    // legacy — mirrors remaining_quantity
+  quantity_original: number | null    // legacy — initial total at purchase
+  // count = units purchased (e.g. 6 cans); amount_per_unit = size each (e.g. 330 ml)
+  // initial total = count × amount_per_unit (derived, not separately stored)
   count: number | null
   amount_per_unit: number | null
   unit: string
+  // ─────────────────────────────────────────────────────────────────────────
   location: StorageLocation
   category: string | null
-  // Stored directly. For receipt items: copied from receipt at save time.
-  // For manual/voice/barcode items: user-supplied or null.
   retailer: string | null
   purchase_date: string | null
   expiry_date: string | null

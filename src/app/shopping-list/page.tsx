@@ -68,7 +68,7 @@ export default function ShoppingListPage() {
     const { data: { session } } = await supabase.auth.getSession()
     const userId = session?.user?.id ?? null
     await supabase.from('inventory_items').insert({
-      name: item.name, quantity: item.quantity, quantity_original: item.quantity,
+      name: item.name, remaining_quantity: item.quantity, quantity: item.quantity, quantity_original: item.quantity,
       unit: item.unit, location: 'cupboard', source: 'manual', status: 'active', user_id: userId,
     })
     setBoughtPrompt(null)
