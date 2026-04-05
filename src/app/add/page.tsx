@@ -87,9 +87,10 @@ export default function AddPage() {
   const [batchSaving,   setBatchSaving]   = useState(false)
 
   // Camera refs
-  const videoRef        = useRef<HTMLVideoElement>(null)
-  const streamRef       = useRef<MediaStream | null>(null)
-  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const videoRef         = useRef<HTMLVideoElement>(null)
+  const streamRef        = useRef<MediaStream | null>(null)
+  const scanIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  const zxingControlsRef = useRef<{ stop: () => void } | null>(null)
 
   // Scan debounce refs (avoid re-scanning same barcode instantly)
   const lastBarcodeRef  = useRef('')
@@ -213,30 +214,44 @@ export default function AddPage() {
 
   // ── Barcode — camera ───────────────────────────────────────────────────────
 
+  // ── Barcode — audio feedback ───────────────────────────────────────────────
+
+  function beep() {
+    try {
+      const ctx = new AudioContext()
+      const osc = ctx.createOscillator(); const gain = ctx.createGain()
+      osc.connect(gain); gain.connect(ctx.destination)
+      osc.type = 'sine'; osc.frequency.value = 1047
+      gain.gain.setValueAtTime(0.25, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12)
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.12)
+    } catch {}
+  }
+
+  // ── Barcode — camera ───────────────────────────────────────────────────────
+
   async function startCamera() {
     setCameraError(null)
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError("Camera not available on this device or browser.")
       return
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-      })
-      streamRef.current = stream
-      setCameraActive(true)
-      setBarcodePhase('scanning')
 
-      // Wait for React to render the <video> element before assigning srcObject
-      await new Promise<void>(r => setTimeout(r, 80))
-      if (!videoRef.current) return
-      videoRef.current.srcObject = stream
-      await videoRef.current.play().catch(() => {})
+    const NativeBarcodeDetector = (window as any).BarcodeDetector
 
-      const NativeBarcodeDetector = (window as any).BarcodeDetector
+    if (NativeBarcodeDetector) {
+      // ── Chrome / Android: native BarcodeDetector ────────────────────────
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
+        streamRef.current = stream
+        setCameraActive(true); setBarcodePhase('scanning')
+        await new Promise<void>(r => setTimeout(r, 80))
+        if (!videoRef.current) return
+        videoRef.current.srcObject = stream
+        await videoRef.current.play().catch(() => {})
 
-      if (NativeBarcodeDetector) {
-        // ── Chrome / Android: native BarcodeDetector ────────────────────────
         const detector = new NativeBarcodeDetector({
           formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'],
         })
@@ -247,36 +262,36 @@ export default function AddPage() {
             const codes = await detector.detect(vid)
             if (codes.length > 0) addToBatch(codes[0].rawValue)
           } catch {}
-        }, 500)
-      } else {
-        // ── iOS Safari / other: @zxing/browser canvas polling ───────────────
-        const { BrowserMultiFormatReader } = await import('@zxing/browser')
-        const zxReader = new BrowserMultiFormatReader()
-        const zxCanvas = document.createElement('canvas')
-        const zxCtx    = zxCanvas.getContext('2d')!
-
-        scanIntervalRef.current = setInterval(async () => {
-          const vid = videoRef.current
-          if (!vid || vid.readyState < 2 || !vid.videoWidth) return
-          zxCanvas.width  = vid.videoWidth
-          zxCanvas.height = vid.videoHeight
-          zxCtx.drawImage(vid, 0, 0)
-          try {
-            // BrowserMultiFormatReader.decode() accepts HTMLCanvasElement
-            const result = await (zxReader as any).decode(zxCanvas)
-            if (result?.getText) addToBatch(result.getText())
-          } catch {
-            // NotFoundException is normal when no barcode is visible in frame
-          }
-        }, 500)
+        }, 400)
+      } catch {
+        setCameraError("Couldn't access camera. Check camera permissions for this site.")
+        setCameraActive(false)
       }
-    } catch {
-      setCameraError("Couldn't access camera. Check that camera permission is allowed for this site.")
-      setCameraActive(false)
+    } else {
+      // ── iOS Safari / other: @zxing/browser decodeFromConstraints ──────────
+      // ZXing manages getUserMedia + scanning loop internally.
+      setCameraActive(true); setBarcodePhase('scanning')
+      await new Promise<void>(r => setTimeout(r, 80))
+      if (!videoRef.current) { setCameraActive(false); setBarcodePhase('idle'); return }
+      try {
+        const { BrowserMultiFormatReader } = await import('@zxing/browser')
+        const reader = new BrowserMultiFormatReader()
+        const controls = await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } },
+          videoRef.current,
+          (result) => { if (result) addToBatch(result.getText()) }
+        )
+        zxingControlsRef.current = controls
+      } catch {
+        setCameraError("Couldn't access camera. Check camera permissions for this site.")
+        setCameraActive(false); setBarcodePhase('idle')
+      }
     }
   }
 
   function stopCamera() {
+    try { zxingControlsRef.current?.stop() } catch {}
+    zxingControlsRef.current = null
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
     if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null }
     setCameraActive(false)
@@ -296,9 +311,9 @@ export default function AddPage() {
     lastBarcodeRef.current = barcode
     lastScanTimeRef.current = now
 
-    // Haptic feedback
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(80)
-    // Visual flash
+    // Haptic + audio + visual feedback
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(60)
+    beep()
     setScanFlash(true); setTimeout(() => setScanFlash(false), 280)
 
     // Duplicate barcode — increment count using functional update (always reads latest state)

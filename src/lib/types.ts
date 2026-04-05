@@ -95,3 +95,36 @@ export type ParsedReceipt = {
   total: number | null
   items: ParsedReceiptItem[]
 }
+
+export type Recipe = {
+  id: string
+  user_id: string | null
+  name: string
+  base_servings: number
+  instructions: string | null
+  source: 'manual' | 'scanned'
+  raw_text: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type RecipeIngredient = {
+  id: string
+  recipe_id: string
+  name: string
+  quantity: number
+  unit: string
+  created_at: string
+}
+
+export type ShoppingListItem = {
+  id: string
+  user_id: string | null
+  name: string
+  quantity: number
+  unit: string
+  checked: boolean
+  recipe_id: string | null
+  notes: string | null
+  created_at: string
+}
