@@ -56,6 +56,7 @@ export default function InventoryPage() {
   const [loading, setLoading]       = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingItem, setEditingItem]   = useState<EditingItemState | null>(null)
+  const [editModalOpen, setEditModalOpen] = useState(false)
   const [usingItem, setUsingItem]       = useState<UsingItemState | null>(null)
   const [openingItem, setOpeningItem]   = useState<OpeningItemState | null>(null)
   const [selectMode, setSelectMode]     = useState<boolean>(false)
@@ -95,6 +96,10 @@ export default function InventoryPage() {
   }
 
   useEffect(() => { loadItems() }, [])
+  useEffect(() => {
+    document.body.style.overflow = editModalOpen ? 'hidden' : ''
+    return () => { document.body.style.overflow = '' }
+  }, [editModalOpen])
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -194,7 +199,13 @@ export default function InventoryPage() {
       status: editingItem.status,
     }).eq('id', editingItem.id)
     setEditingItem(null)
+    setEditModalOpen(false)
     loadItems()
+  }
+
+  function cancelEdit() {
+    setEditingItem(null)
+    setEditModalOpen(false)
   }
 
   async function changeLocation(id: string, loc: string) {
@@ -524,9 +535,27 @@ export default function InventoryPage() {
 
   const partialUsePanel = (item: InventoryItemWithPrice) => (
     <div style={{ background: '#f4fff6', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
-      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 12px' }}>
+      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 10px' }}>
         How much of <span style={{ color: '#4caf50' }}>{item.name}</span> did you use?
       </p>
+      {/* Quick percentage buttons */}
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+        {[25, 50, 75].map(pct => (
+          <button
+            key={pct}
+            onClick={() => setUsingItem({ ...usingItem!, used: parseFloat(((usingItem!.maxQty * pct) / 100).toFixed(3)) })}
+            style={{ ...btnBase, flex: 1, background: '#e8f5e9', color: '#388e3c', border: '1.5px solid rgba(76,175,80,0.2)', padding: '7px 4px', fontSize: '13px' }}
+          >
+            {pct}%
+          </button>
+        ))}
+        <button
+          onClick={() => setUsingItem({ ...usingItem!, used: usingItem!.maxQty })}
+          style={{ ...btnBase, flex: 1, background: '#c8e6c9', color: '#2e7d32', border: 'none', padding: '7px 4px', fontSize: '13px' }}
+        >
+          All
+        </button>
+      </div>
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
         <input
           type="number" min={0.1} max={usingItem!.maxQty} step={0.1}
@@ -611,6 +640,7 @@ export default function InventoryPage() {
           })
           setUsingItem(null)
           setOpeningItem(null)
+          setEditModalOpen(true)
         }} style={{ ...btnBase, background: '#fff8f0', color: '#ff7043' }}>✏️ Edit</button>
         <select value={item.location} onChange={(e) => changeLocation(item.id, e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>
           <option value="fridge">Fridge</option>
@@ -623,100 +653,7 @@ export default function InventoryPage() {
     )
   }
 
-  const editForm = () => editingItem && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '12px', padding: '14px', background: 'white', borderRadius: '12px', border: '1.5px solid rgba(255,112,67,0.15)' }}>
-      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff7043', margin: 0 }}>Edit Item</p>
-
-      {/* Name */}
-      <div>
-        <label style={editLabelStyle}>Name</label>
-        <input type="text" value={editingItem.name} onChange={e => setEditingItem({ ...editingItem, name: e.target.value })} style={editInputStyle} />
-      </div>
-
-      {/* Category + Location */}
-      <div style={{ display: 'flex', gap: '8px' }}>
-        <div style={{ flex: 1 }}>
-          <label style={editLabelStyle}>Category</label>
-          <select value={editingItem.category} onChange={e => setEditingItem({ ...editingItem, category: e.target.value })} style={editSelectStyle}>
-            <option value="">— none —</option>
-            {categories.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={editLabelStyle}>Location</label>
-          <select value={editingItem.location} onChange={e => setEditingItem({ ...editingItem, location: e.target.value })} style={editSelectStyle}>
-            {locationOptions.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
-          </select>
-        </div>
-      </div>
-
-      {/* Purchase structure: count × size each + unit */}
-      <div>
-        <label style={editLabelStyle}>Purchase structure</label>
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ ...editLabelStyle, fontSize: '10px' }}>Count</label>
-            <input type="number" min={1} step={1} placeholder="1" value={editingItem.itemCount} onChange={e => setEditingItem({ ...editingItem, itemCount: e.target.value })} style={{ ...editInputStyle, textAlign: 'center' }} />
-          </div>
-          <span style={{ color: '#ccc', fontWeight: 700, fontSize: '16px', paddingBottom: '9px', flexShrink: 0 }}>×</span>
-          <div style={{ flex: 1 }}>
-            <label style={{ ...editLabelStyle, fontSize: '10px' }}>Size each</label>
-            <input type="number" min={0} step={0.1} placeholder="—" value={editingItem.amount_per_unit} onChange={e => setEditingItem({ ...editingItem, amount_per_unit: e.target.value })} style={{ ...editInputStyle, textAlign: 'center' }} />
-          </div>
-          <div style={{ flex: 2 }}>
-            <label style={{ ...editLabelStyle, fontSize: '10px' }}>Unit</label>
-            <select value={editingItem.unit} onChange={e => setEditingItem({ ...editingItem, unit: e.target.value })} style={editSelectStyle}>
-              {units.map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Current remaining */}
-      <div>
-        <label style={editLabelStyle}>Currently remaining</label>
-        <input type="number" min={0} step={0.1} value={editingItem.quantity} onChange={e => setEditingItem({ ...editingItem, quantity: e.target.value })} style={{ ...editInputStyle, maxWidth: '120px' }} />
-      </div>
-
-      {/* Expiry (hide for household) */}
-      {editingItem.location !== 'household' && (
-        <div>
-          <label style={editLabelStyle}>Expiry date</label>
-          <input type="date" value={editingItem.expiry_date} onChange={e => setEditingItem({ ...editingItem, expiry_date: e.target.value })} style={{ ...editInputStyle, maxWidth: '200px' }} />
-        </div>
-      )}
-
-      {/* Opened date */}
-      <div>
-        <label style={editLabelStyle}>Opened date</label>
-        <input type="date" value={editingItem.opened_at} onChange={e => setEditingItem({ ...editingItem, opened_at: e.target.value })} style={{ ...editInputStyle, maxWidth: '200px' }} />
-      </div>
-
-      {/* Retailer */}
-      <div>
-        <label style={editLabelStyle}>Retailer</label>
-        <input type="text" placeholder="e.g. Tesco" value={editingItem.retailer} onChange={e => setEditingItem({ ...editingItem, retailer: e.target.value })} style={editInputStyle} />
-      </div>
-
-      {/* Status */}
-      <div>
-        <label style={editLabelStyle}>Status</label>
-        <select value={editingItem.status} onChange={e => setEditingItem({ ...editingItem, status: e.target.value })} style={{ ...editSelectStyle, maxWidth: '200px' }}>
-          <option value="active">Active</option>
-          <option value="used">Used</option>
-          <option value="discarded">Discarded</option>
-          <option value="expired">Expired</option>
-          <option value="removed">Removed</option>
-        </select>
-      </div>
-
-      {/* Buttons */}
-      <div style={{ display: 'flex', gap: '8px' }}>
-        <button onClick={saveEdit} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>Save</button>
-        <button onClick={() => setEditingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
-      </div>
-    </div>
-  )
+  // editForm removed — edit is now a fullscreen modal (rendered at bottom of JSX)
 
   // ── Item header helpers ───────────────────────────────────────��───────────
 
@@ -1033,7 +970,6 @@ export default function InventoryPage() {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                               {group.batches.map((batch, bi) => {
                                 const bd = daysLeft(batch.expiry_date)
-                                const isEditingBatch = editingItem?.id === batch.id
                                 return (
                                   <div key={batch.id} style={{ background: 'white', borderRadius: '10px', padding: '10px 12px', border: '1px solid #f0f0f0' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
@@ -1047,14 +983,14 @@ export default function InventoryPage() {
                                       Added {formatDateAdded(batch.created_at)}
                                       {batch.opened_at && <span style={{ color: '#20b2aa', marginLeft: '8px' }}>🔓 {formatOpenedDate(batch.opened_at)}</span>}
                                     </p>
-                                    {isEditingBatch ? editForm() : actionArea(batch)}
+                                    {actionArea(batch)}
                                   </div>
                                 )
                               })}
                             </div>
                           ) : (
                             <>
-                              {editingItem?.id === repBatch.id ? editForm() : actionArea(repBatch)}
+                              {actionArea(repBatch)}
                               {group.category && <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif" }}>{group.category}</span>}
                             </>
                           )}
@@ -1073,7 +1009,6 @@ export default function InventoryPage() {
                 {sorted.map((item) => {
                   const d = daysLeft(item.expiry_date)
                   const isExpanded = expandedId === item.id
-                  const isEditing = editingItem?.id === item.id
                   return (
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
@@ -1086,7 +1021,7 @@ export default function InventoryPage() {
                       </div>
                       {isExpanded && (
                         <div style={{ borderTop: '1px solid #f0f0f0', padding: '12px 16px', background: expandedBg(item.location) }}>
-                          {isEditing ? editForm() : actionArea(item)}
+                          {actionArea(item)}
                           {item.category && <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '3px 10px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif" }}>{item.category}</span>}
                         </div>
                       )}
@@ -1132,6 +1067,121 @@ export default function InventoryPage() {
           >
             Cancel
           </button>
+        </div>
+      )}
+
+      {/* ── Full-screen edit modal ── */}
+      {editModalOpen && editingItem && (
+        <div
+          onClick={cancelEdit}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 3000, display: 'flex', alignItems: 'flex-end', fontFamily: "'Nunito',sans-serif" }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: 'white', borderRadius: '24px 24px 0 0', padding: '20px 20px 40px', width: '100%', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 -8px 40px rgba(0,0,0,0.2)', boxSizing: 'border-box' }}
+          >
+            {/* Drag handle */}
+            <div style={{ width: '40px', height: '4px', background: '#eee', borderRadius: '2px', margin: '0 auto 18px' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '22px', color: '#ff7043', margin: 0 }}>Edit Item</p>
+              <button onClick={cancelEdit} style={{ background: 'none', border: 'none', fontSize: '22px', color: '#ccc', cursor: 'pointer', padding: '4px', lineHeight: 1 }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Name */}
+              <div>
+                <label style={editLabelStyle}>Name</label>
+                <input type="text" value={editingItem.name} onChange={e => setEditingItem({ ...editingItem, name: e.target.value })} style={editInputStyle} />
+              </div>
+
+              {/* Category + Location */}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ flex: 1 }}>
+                  <label style={editLabelStyle}>Category</label>
+                  <select value={editingItem.category} onChange={e => setEditingItem({ ...editingItem, category: e.target.value })} style={editSelectStyle}>
+                    <option value="">— none —</option>
+                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={editLabelStyle}>Location</label>
+                  <select value={editingItem.location} onChange={e => setEditingItem({ ...editingItem, location: e.target.value })} style={editSelectStyle}>
+                    {locationOptions.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Purchase structure */}
+              <div>
+                <label style={editLabelStyle}>Purchase structure</label>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-end' }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ ...editLabelStyle, fontSize: '10px' }}>Count</label>
+                    <input type="number" min={1} step={1} placeholder="1" value={editingItem.itemCount} onChange={e => setEditingItem({ ...editingItem, itemCount: e.target.value })} style={{ ...editInputStyle, textAlign: 'center' }} />
+                  </div>
+                  <span style={{ color: '#ccc', fontWeight: 700, fontSize: '16px', paddingBottom: '9px', flexShrink: 0 }}>×</span>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ ...editLabelStyle, fontSize: '10px' }}>Size each</label>
+                    <input type="number" min={0} step={0.1} placeholder="—" value={editingItem.amount_per_unit} onChange={e => setEditingItem({ ...editingItem, amount_per_unit: e.target.value })} style={{ ...editInputStyle, textAlign: 'center' }} />
+                  </div>
+                  <div style={{ flex: 2 }}>
+                    <label style={{ ...editLabelStyle, fontSize: '10px' }}>Unit</label>
+                    <select value={editingItem.unit} onChange={e => setEditingItem({ ...editingItem, unit: e.target.value })} style={editSelectStyle}>
+                      {units.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Currently remaining */}
+              <div>
+                <label style={editLabelStyle}>Currently remaining</label>
+                <input type="number" min={0} step={0.1} value={editingItem.quantity} onChange={e => setEditingItem({ ...editingItem, quantity: e.target.value })} style={{ ...editInputStyle, maxWidth: '140px' }} />
+              </div>
+
+              {/* Expiry */}
+              {editingItem.location !== 'household' && (
+                <div>
+                  <label style={editLabelStyle}>Expiry date</label>
+                  <input type="date" value={editingItem.expiry_date} onChange={e => setEditingItem({ ...editingItem, expiry_date: e.target.value })} style={{ ...editInputStyle, maxWidth: '200px' }} />
+                </div>
+              )}
+
+              {/* Opened date */}
+              <div>
+                <label style={editLabelStyle}>Opened date</label>
+                <input type="date" value={editingItem.opened_at} onChange={e => setEditingItem({ ...editingItem, opened_at: e.target.value })} style={{ ...editInputStyle, maxWidth: '200px' }} />
+              </div>
+
+              {/* Retailer */}
+              <div>
+                <label style={editLabelStyle}>Retailer</label>
+                <input type="text" placeholder="e.g. Tesco" value={editingItem.retailer} onChange={e => setEditingItem({ ...editingItem, retailer: e.target.value })} style={editInputStyle} />
+              </div>
+
+              {/* Status */}
+              <div>
+                <label style={editLabelStyle}>Status</label>
+                <select value={editingItem.status} onChange={e => setEditingItem({ ...editingItem, status: e.target.value })} style={{ ...editSelectStyle, maxWidth: '200px' }}>
+                  <option value="active">Active</option>
+                  <option value="used">Used</option>
+                  <option value="discarded">Discarded</option>
+                  <option value="expired">Expired</option>
+                  <option value="removed">Removed</option>
+                </select>
+              </div>
+
+              {/* Buttons */}
+              <div style={{ display: 'flex', gap: '8px', paddingTop: '4px' }}>
+                <button onClick={saveEdit} style={{ flex: 1, ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', padding: '14px', fontSize: '16px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)', fontFamily: "'Fredoka One',cursive" }}>
+                  Save Changes
+                </button>
+                <button onClick={cancelEdit} style={{ ...btnBase, background: '#f5f5f5', color: '#888', padding: '14px 20px' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </main>
