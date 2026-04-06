@@ -36,6 +36,7 @@ type UsingItemState  = { id: string; used: number; unit: string; maxQty: number 
 type OpeningItemState = { id: string; name: string; category: string | null; suggestedExpiry: string; rangeText: string; hasShelfLife: boolean }
 type EditingItemState = {
   id: string
+  source: string
   name: string
   category: string
   location: string
@@ -97,8 +98,9 @@ export default function InventoryPage() {
   const enrichStreamRef   = useRef<MediaStream | null>(null)
   const enrichScanRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const enrichZxingRef    = useRef<{ stop: () => void } | null>(null)
-  const enrichLastBarcode = useRef('')
-  const enrichReceiptRef  = useRef<HTMLInputElement>(null)
+  const enrichLastBarcode   = useRef('')
+  const enrichLastScanTime  = useRef<number>(0)
+  const enrichReceiptRef    = useRef<HTMLInputElement>(null)
 
   const [voiceListening, setVoiceListening]     = useState(false)
   const [voiceProcessing, setVoiceProcessing]   = useState(false)
@@ -477,6 +479,18 @@ export default function InventoryPage() {
 
   // ── Enrichment helpers ────────────────────────────────────────────────────
 
+  function enrichBeep() {
+    try {
+      const ctx = new AudioContext()
+      const osc = ctx.createOscillator(); const gain = ctx.createGain()
+      osc.connect(gain); gain.connect(ctx.destination)
+      osc.type = 'sine'; osc.frequency.value = 1047
+      gain.gain.setValueAtTime(0.25, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12)
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.12)
+    } catch {}
+  }
+
   function resetEnrichState() {
     stopEnrichCamera()
     setEnrichMode(null)
@@ -528,15 +542,19 @@ export default function InventoryPage() {
             const codes = await detector.detect(vid)
             if (codes.length > 0) {
               const bc = codes[0].rawValue
-              if (bc === enrichLastBarcode.current) return
+              const now = Date.now()
+              if (bc === enrichLastBarcode.current && now - enrichLastScanTime.current < 2000) return
               enrichLastBarcode.current = bc
+              enrichLastScanTime.current = now
+              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(60)
+              enrichBeep()
               stopEnrichCamera()
               setEnrichScanFlash(true); setTimeout(() => setEnrichScanFlash(false), 280)
               setEnrichBarcodeInput(bc)
               lookupEnrichBarcode(bc)
             }
           } catch {}
-        }, 400)
+        }, 600)
       } catch {
         setEnrichCameraError("Couldn't access camera. Check permissions.")
         setEnrichCameraActive(false)
@@ -554,9 +572,14 @@ export default function InventoryPage() {
           (result) => {
             if (!result) return
             const bc = result.getText()
-            if (bc === enrichLastBarcode.current) return
+            const now = Date.now()
+            if (bc === enrichLastBarcode.current && now - enrichLastScanTime.current < 2000) return
             enrichLastBarcode.current = bc
+            enrichLastScanTime.current = now
+            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(60)
+            enrichBeep()
             stopEnrichCamera()
+            setEnrichScanFlash(true); setTimeout(() => setEnrichScanFlash(false), 280)
             setEnrichBarcodeInput(bc)
             lookupEnrichBarcode(bc)
           }
@@ -592,9 +615,16 @@ export default function InventoryPage() {
       ...editingItem,
       name: data.name || editingItem.name,
       category: data.category || editingItem.category,
-      itemCount: String(data.count ?? editingItem.itemCount),
-      amount_per_unit: data.amount_per_unit != null ? String(data.amount_per_unit) : editingItem.amount_per_unit,
-      unit: data.unit || editingItem.unit,
+      // Only apply count/amount if user hasn't already set them (don't clobber manual entries)
+      itemCount: !editingItem.itemCount || editingItem.itemCount === '1'
+        ? String(data.count ?? editingItem.itemCount)
+        : editingItem.itemCount,
+      amount_per_unit: !editingItem.amount_per_unit && data.amount_per_unit != null
+        ? String(data.amount_per_unit)
+        : editingItem.amount_per_unit,
+      unit: !editingItem.unit || editingItem.unit === 'item'
+        ? (data.unit || editingItem.unit)
+        : editingItem.unit,
       barcode: data.barcode,
     })
     setEnrichApplied('✅ Barcode info applied — review and save')
@@ -830,6 +860,7 @@ export default function InventoryPage() {
         <button onClick={() => {
           setEditingItem({
             id: item.id,
+            source: item.source,
             name: item.name,
             category: item.category || '',
             location: item.location,
@@ -869,9 +900,10 @@ export default function InventoryPage() {
     itemCount?: number | null; amountPerUnit?: number | null
     unit: string; createdAt: string; openedAt: string | null; price: number | null
     retailer?: string | null; hasBatches?: boolean
+    source?: string; barcode?: string | null
   }
 
-  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, hasBatches }: HeaderProps) => {
+  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, hasBatches, source, barcode }: HeaderProps) => {
     const qtyDisplay = (() => {
       const fmt = (n: number) => n % 1 === 0 ? String(n) : n.toFixed(1)
       // `quantity` prop is now remaining_quantity (passed in from item.remaining_quantity ?? item.quantity)
@@ -916,11 +948,17 @@ export default function InventoryPage() {
           {hasBatches && (
             <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>batches</span>
           )}
+          {source === 'barcode' && barcode && (
+            <span style={{ background: 'rgba(74,144,217,0.1)', color: '#4a90d9', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>📷 barcode</span>
+          )}
+          {source === 'voice' && (
+            <span style={{ background: 'rgba(156,39,176,0.1)', color: '#9c27b0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🎤 voice</span>
+          )}
         </div>
         <p style={{ color: '#ccc', fontSize: '11px', fontWeight: 600, margin: '3px 0 0', fontFamily: "'Nunito',sans-serif", display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
           <span style={{ color: '#bbb', fontWeight: 700 }}>{qtyDisplay} · {location}</span>
           <span>· added {formatDateAdded(createdAt)}</span>
-          {price != null && <span style={{ color: '#d4a96e' }}>· £{price.toFixed(2)}</span>}
+          {price != null ? <span style={{ color: '#d4a96e' }}>· £{price.toFixed(2)}</span> : <span style={{ color: '#ddd' }}>· no price</span>}
         </p>
       </div>
     )
@@ -1194,7 +1232,7 @@ export default function InventoryPage() {
                     <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
-                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} />
+                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} source={!hasBatches ? repBatch.source : undefined} barcode={!hasBatches ? repBatch.barcode : undefined} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
@@ -1249,7 +1287,7 @@ export default function InventoryPage() {
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
-                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} />
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} source={item.source} barcode={item.barcode} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
@@ -1404,6 +1442,36 @@ export default function InventoryPage() {
                 </div>
               </div>
 
+              {/* ── Provenance row ── */}
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '10px 14px', background: '#fafafa', borderRadius: '10px' }}>
+                {(() => {
+                  const srcMap: Record<string, string> = { receipt: '🧾 receipt', barcode: '📷 barcode', manual: '✏️ manual', voice: '🎤 voice' }
+                  const srcLabel = srcMap[editingItem.source] || editingItem.source
+                  const srcColor: Record<string, string> = { receipt: '#ff7043', barcode: '#4a90d9', manual: '#888', voice: '#9c27b0' }
+                  const srcBg: Record<string, string> = { receipt: 'rgba(255,112,67,0.1)', barcode: 'rgba(74,144,217,0.1)', manual: '#f0f0f0', voice: 'rgba(156,39,176,0.1)' }
+                  return (
+                    <span style={{ background: srcBg[editingItem.source] || '#f0f0f0', color: srcColor[editingItem.source] || '#888', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', padding: '3px 10px', borderRadius: '50px' }}>
+                      {srcLabel}
+                    </span>
+                  )
+                })()}
+                {editingItem.price_source && (
+                  <span style={{ background: 'rgba(212,169,110,0.15)', color: '#b8860b', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', padding: '3px 10px', borderRadius: '50px' }}>
+                    £ {editingItem.price_source}
+                  </span>
+                )}
+                {!editingItem.price && (
+                  <span style={{ background: '#f5f5f5', color: '#ccc', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', padding: '3px 10px', borderRadius: '50px' }}>no price</span>
+                )}
+                {editingItem.barcode ? (
+                  <span style={{ background: 'rgba(74,144,217,0.1)', color: '#4a90d9', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', padding: '3px 10px', borderRadius: '50px' }}>
+                    📷 {editingItem.barcode}
+                  </span>
+                ) : (
+                  <span style={{ background: '#f5f5f5', color: '#ccc', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', padding: '3px 10px', borderRadius: '50px' }}>no barcode</span>
+                )}
+              </div>
+
               {/* ── Improve item details ── */}
               <div style={{ borderTop: '1.5px solid #f0f0f0', paddingTop: '16px' }}>
                 <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#888', margin: '0 0 10px' }}>
@@ -1496,9 +1564,31 @@ export default function InventoryPage() {
                               {enrichBarcodeResult.amount_per_unit != null ? `${enrichBarcodeResult.amount_per_unit} ${enrichBarcodeResult.unit}` : enrichBarcodeResult.unit}
                               {' · '}{enrichBarcodeResult.category}
                             </p>
-                            <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: '0 0 10px' }}>
-                              This will update: name, category, amount/unit. Price and retailer unchanged.
-                            </p>
+                            {/* Diff preview — show exactly what will change */}
+                            {(() => {
+                              if (!editingItem) return null
+                              const diffs: string[] = []
+                              if (enrichBarcodeResult!.name && enrichBarcodeResult!.name !== editingItem.name)
+                                diffs.push(`Name: "${editingItem.name}" → "${enrichBarcodeResult!.name}"`)
+                              if (enrichBarcodeResult!.category && enrichBarcodeResult!.category !== editingItem.category)
+                                diffs.push(`Category: ${editingItem.category || '—'} → ${enrichBarcodeResult!.category}`)
+                              const willSetApu = !editingItem.amount_per_unit && enrichBarcodeResult!.amount_per_unit != null
+                              if (willSetApu)
+                                diffs.push(`Size: — → ${enrichBarcodeResult!.amount_per_unit} ${enrichBarcodeResult!.unit}`)
+                              const willSetCount = (!editingItem.itemCount || editingItem.itemCount === '1') && (enrichBarcodeResult!.count ?? 1) > 1
+                              if (willSetCount)
+                                diffs.push(`Count: 1 → ${enrichBarcodeResult!.count}`)
+                              return diffs.length > 0 ? (
+                                <div style={{ background: '#f0fff4', border: '1px solid rgba(76,175,80,0.2)', borderRadius: '8px', padding: '8px 10px', marginBottom: '10px' }}>
+                                  {diffs.map((d, i) => (
+                                    <p key={i} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', color: '#388e3c', margin: i === 0 ? '0' : '2px 0 0' }}>↳ {d}</p>
+                                  ))}
+                                  <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: '4px 0 0' }}>Price, retailer and quantity unchanged.</p>
+                                </div>
+                              ) : (
+                                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: '0 0 10px' }}>No changes to apply — already up to date.</p>
+                              )
+                            })()}
                             <div style={{ display: 'flex', gap: '8px' }}>
                               <button onClick={() => applyBarcodeEnrichment(enrichBarcodeResult!)} style={{ ...btnBase, flex: 1, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', padding: '9px', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>
                                 Apply to item

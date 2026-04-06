@@ -428,7 +428,7 @@ export default function AddPage() {
         source: 'receipt' as Mode,
         name: item.normalized_name,
         count: String(item.quantity || 1),
-        amountPerUnit: '',
+        amountPerUnit: item.amount_per_unit != null ? String(item.amount_per_unit) : '',
         unit: item.unit || 'item',
         location: suggestLocation(item.normalized_name, item.category) as StorageLocation,
         category: item.category || '',

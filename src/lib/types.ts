@@ -89,6 +89,7 @@ export type ParsedReceiptItem = {
   raw_text: string
   normalized_name: string
   quantity: number
+  amount_per_unit: number | null
   unit: string
   category: string
   confidence: number
