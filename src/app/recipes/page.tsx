@@ -137,6 +137,7 @@ export default function RecipesPage() {
   const [searchQuery,    setSearchQuery]    = useState('')
   const [editMode,       setEditMode]       = useState(false)
   const [currentUserId,  setCurrentUserId]  = useState<string | null>(null)
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   // Add / edit form state (shared between add_form phase and edit mode)
   const [draftName,         setDraftName]         = useState('')
@@ -262,10 +263,13 @@ export default function RecipesPage() {
     setPhase('list')
   }
 
-  async function deleteRecipe(id: string) {
-    if (!confirm('Delete this recipe?')) return
+  async function confirmDeleteRecipe(id: string) {
+    // Delete ingredients first, then recipe
+    await supabase.from('recipe_ingredients').delete().eq('recipe_id', id)
     await supabase.from('recipes').delete().eq('id', id)
+    setDeleteConfirmId(null)
     if (selectedRecipe?.id === id) { setSelectedRecipe(null); setPhase('list') }
+    showToast('🗑 Recipe deleted')
     loadRecipes()
   }
 
@@ -773,15 +777,38 @@ export default function RecipesPage() {
         {/* ══════════════════════════════════════════════════ DETAIL ══ */}
         {phase === 'detail' && selectedRecipe && (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-              <button onClick={() => { setPhase('list'); setEditMode(false) }} style={{ background: 'none', border: 'none', color: '#ff7043', fontWeight: 700, fontSize: '14px', cursor: 'pointer', padding: 0 }}>← Recipes</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: deleteConfirmId === selectedRecipe.id ? '8px' : '20px' }}>
+              <button onClick={() => { setPhase('list'); setEditMode(false); setDeleteConfirmId(null) }} style={{ background: 'none', border: 'none', color: '#ff7043', fontWeight: 700, fontSize: '14px', cursor: 'pointer', padding: 0 }}>← Recipes</button>
               <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '26px', color: '#2d2d2d', margin: 0, flex: 1, lineHeight: 1.2 }}>{selectedRecipe.name}</h1>
-              <button onClick={() => { if (editMode) setEditMode(false); else startEditRecipe(selectedRecipe) }}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', color: editMode ? '#ff7043' : '#aaa', padding: '4px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }}>
-                {editMode ? '✕ Cancel' : '✏️ Edit'}
-              </button>
-              <button onClick={() => deleteRecipe(selectedRecipe.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#ddd', padding: '4px' }}>🗑</button>
+              {deleteConfirmId !== selectedRecipe.id && (
+                <>
+                  <button onClick={() => { if (editMode) setEditMode(false); else startEditRecipe(selectedRecipe) }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', color: editMode ? '#ff7043' : '#aaa', padding: '4px', fontFamily: "'Nunito',sans-serif", fontWeight: 700 }}>
+                    {editMode ? '✕ Cancel' : '✏️ Edit'}
+                  </button>
+                  <button onClick={() => { setDeleteConfirmId(selectedRecipe.id); setEditMode(false) }} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', color: '#ddd', padding: '4px' }}>🗑</button>
+                </>
+              )}
             </div>
+
+            {/* Delete confirmation inline */}
+            {deleteConfirmId === selectedRecipe.id && (
+              <div style={{ background: '#fff5f5', border: '1.5px solid rgba(255,68,68,0.2)', borderRadius: '12px', padding: '14px 16px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555', flex: 1 }}>
+                  Delete <strong>{selectedRecipe.name}</strong>? This can't be undone.
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => confirmDeleteRecipe(selectedRecipe.id)}
+                    style={{ border: 'none', borderRadius: '50px', padding: '8px 18px', background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', cursor: 'pointer', boxShadow: '0 3px 10px rgba(255,68,68,0.35)' }}>
+                    Delete
+                  </button>
+                  <button onClick={() => setDeleteConfirmId(null)}
+                    style={{ border: 'none', borderRadius: '50px', padding: '8px 16px', background: '#f0f0f0', color: '#888', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* ── Edit mode form ── */}
             {editMode && (

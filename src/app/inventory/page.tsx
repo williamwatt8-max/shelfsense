@@ -6,9 +6,6 @@ import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
 
-// ── Extended type: InventoryItem + price from receipt_items join ──────────────
-type InventoryItemWithPrice = InventoryItem & { price: number | null }
-
 type GroupedItem = {
   name: string
   totalQuantity: number
@@ -17,7 +14,7 @@ type GroupedItem = {
   category: string | null
   nearestExpiry: string | null
   retailer: string | null
-  batches: InventoryItemWithPrice[]
+  batches: InventoryItem[]
 }
 
 type UsingItemState  = { id: string; used: number; unit: string; maxQty: number }
@@ -34,6 +31,7 @@ type EditingItemState = {
   expiry_date: string
   opened_at: string
   retailer: string
+  price: string
   status: string
 }
 type VoiceAction = {
@@ -49,7 +47,7 @@ type VoiceAction = {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
-  const [items, setItems]           = useState<InventoryItemWithPrice[]>([])
+  const [items, setItems]           = useState<InventoryItem[]>([])
   const [filter, setFilter]         = useState<string>('all')
   const [sortBy, setSortBy]         = useState<string>('date_added')
   const [grouped, setGrouped]       = useState<boolean>(true)
@@ -62,6 +60,8 @@ export default function InventoryPage() {
   const [selectMode, setSelectMode]     = useState<boolean>(false)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
   const [retailerFilter, setRetailerFilter] = useState<string | null>(null)
+  const [searchQuery,   setSearchQuery]    = useState<string>('')
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false)
   const [toast, setToast]               = useState<string | null>(null)
   const [fabOpen, setFabOpen]                   = useState(false)
   const [voiceListening, setVoiceListening]     = useState(false)
@@ -87,9 +87,10 @@ export default function InventoryPage() {
       setLoading(false)
       return
     }
-    const mapped: InventoryItemWithPrice[] = (data || []).map((d: any) => ({
+    const mapped: InventoryItem[] = (data || []).map((d: any) => ({
       ...d,
-      price: d.receipt_items?.price ?? null,
+      // inventory_items.price takes precedence; fall back to receipt_items join for legacy rows
+      price: d.price ?? d.receipt_items?.price ?? null,
       receipt_items: undefined,
     }))
     setItems(mapped)
@@ -197,6 +198,7 @@ export default function InventoryPage() {
       expiry_date: editingItem.expiry_date || null,
       opened_at: editingItem.opened_at || null,
       retailer: editingItem.retailer.trim() || null,
+      price: editingItem.price !== '' ? parseFloat(editingItem.price) : null,
       status: editingItem.status,
     }).eq('id', editingItem.id)
     setEditingItem(null)
@@ -392,7 +394,7 @@ export default function InventoryPage() {
     setVoiceTranscript(null)
   }
 
-  function startOpening(item: InventoryItemWithPrice) {
+  function startOpening(item: InventoryItem) {
     setEditingItem(null)
     setUsingItem(null)
     const sl = lookupShelfLife(item.name, item.category)
@@ -435,6 +437,7 @@ export default function InventoryPage() {
   const retailers = Array.from(new Set(items.map(i => i.retailer).filter(Boolean))) as string[]
 
   const filtered = items.filter((item) => {
+    if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
     if (retailerFilter && item.retailer !== retailerFilter) return false
     const d = daysLeft(item.expiry_date)
     const isExpired = d !== null && d < 0
@@ -445,7 +448,7 @@ export default function InventoryPage() {
     return item.location === filter
   })
 
-  function sortItems(arr: InventoryItemWithPrice[]): InventoryItemWithPrice[] {
+  function sortItems(arr: InventoryItem[]): InventoryItem[] {
     return [...arr].sort((a, b) => {
       if (sortBy === 'expiry') {
         const da = daysLeft(a.expiry_date), db = daysLeft(b.expiry_date)
@@ -460,7 +463,7 @@ export default function InventoryPage() {
     })
   }
 
-  function groupItems(arr: InventoryItemWithPrice[]): GroupedItem[] {
+  function groupItems(arr: InventoryItem[]): GroupedItem[] {
     const map = new Map<string, GroupedItem>()
     for (const item of arr) {
       const key = item.name.toLowerCase().trim()
@@ -508,7 +511,6 @@ export default function InventoryPage() {
     background: 'linear-gradient(135deg, #fdf6ec 0%, #fde8d0 50%, #fce4e4 100%)',
     padding: '72px 24px 32px',
   }
-  const filters = ['all', 'fridge', 'freezer', 'cupboard', 'household', 'expiring', 'expired']
   const units   = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
   const btnBase: React.CSSProperties = { border: 'none', borderRadius: '50px', padding: '7px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', cursor: 'pointer' }
   const categories = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
@@ -534,7 +536,7 @@ export default function InventoryPage() {
 
   // ── Sub-panels ────────────────────────────────────────────────────────────
 
-  const partialUsePanel = (item: InventoryItemWithPrice) => (
+  const partialUsePanel = (item: InventoryItem) => (
     <div style={{ background: '#f4fff6', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
       <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 10px' }}>
         How much of <span style={{ color: '#4caf50' }}>{item.name}</span> did you use?
@@ -574,7 +576,7 @@ export default function InventoryPage() {
     </div>
   )
 
-  const openingPanel = (item: InventoryItemWithPrice) => (
+  const openingPanel = (item: InventoryItem) => (
     <div style={{ background: '#fff8f0', border: '1.5px solid rgba(255,112,67,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
       <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>
         📦 Marking <span style={{ color: '#ff7043' }}>{item.name}</span> as opened today
@@ -613,7 +615,7 @@ export default function InventoryPage() {
     </div>
   )
 
-  const actionArea = (item: InventoryItemWithPrice) => {
+  const actionArea = (item: InventoryItem) => {
     if (usingItem?.id === item.id)  return partialUsePanel(item)
     if (openingItem?.id === item.id) return openingPanel(item)
     return (
@@ -637,6 +639,7 @@ export default function InventoryPage() {
             expiry_date: item.expiry_date || '',
             opened_at: item.opened_at || '',
             retailer: item.retailer || '',
+            price: item.price != null ? String(item.price) : '',
             status: item.status,
           })
           setUsingItem(null)
@@ -826,39 +829,105 @@ export default function InventoryPage() {
           </button>
         )}
 
-        {/* ── Filter pills ── */}
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
-          {filters.map((f) => {
-            const active = filter === f
-            const isExpiredTab = f === 'expired'
-            const label =
-              f === 'all'       ? 'All' :
-              f === 'expiring'  ? `⏰ Expiring${expiringCount > 0 ? ` (${expiringCount})` : ''}` :
-              f === 'expired'   ? `⚠️ Expired${expiredCount > 0 ? ` (${expiredCount})` : ''}` :
-              f === 'household' ? '🏠 Household' :
-              f.charAt(0).toUpperCase() + f.slice(1)
-            const activeBg = isExpiredTab
-              ? 'linear-gradient(135deg,#ff4444,#ff6b6b)'
-              : 'linear-gradient(135deg,#ff7043,#ff9a3c)'
-            return (
-              <button key={f} onClick={() => setFilter(f)} style={{ padding: '7px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: active ? activeBg : 'white', color: active ? 'white' : '#888', boxShadow: active ? (isExpiredTab ? '0 4px 12px rgba(255,68,68,0.4)' : '0 4px 12px rgba(255,112,67,0.4)') : '0 2px 8px rgba(0,0,0,0.08)' }}>
-                {label}
-              </button>
-            )
-          })}
+        {/* ── Search ── */}
+        <div style={{ marginBottom: '10px' }}>
+          <input
+            type="text"
+            placeholder="🔍 Search items..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            style={{ width: '100%', border: '2px solid #eee', borderRadius: '50px', padding: '9px 18px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', boxSizing: 'border-box', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', color: '#2d2d2d' }}
+          />
         </div>
 
-        {/* ── Retailer filter dropdown ── */}
-        {retailers.length > 0 && (
-          <div style={{ marginBottom: '12px' }}>
-            <select
-              value={retailerFilter || ''}
-              onChange={e => setRetailerFilter(e.target.value || null)}
-              style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: retailerFilter ? '#ff7043' : '#888', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', width: '100%', maxWidth: '280px' }}
-            >
-              <option value="">🏪 All Stores</option>
-              {retailers.map(r => <option key={r} value={r}>{r}</option>)}
-            </select>
+        {/* ── Location chips + Filters button ── */}
+        {!selectMode && (
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', flexWrap: 'nowrap', overflowX: 'auto', paddingBottom: '2px' }}>
+            {(['all', 'fridge', 'freezer', 'cupboard', 'household'] as const).map(f => {
+              const active = filter === f
+              const label = f === 'all' ? 'All' : f === 'household' ? '🏠' : f.charAt(0).toUpperCase() + f.slice(1)
+              return (
+                <button key={f} onClick={() => setFilter(f)} style={{ padding: '7px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: active ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: active ? 'white' : '#888', boxShadow: active ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {label}
+                </button>
+              )
+            })}
+            {/* Filters button */}
+            {(() => {
+              const activeCount = [
+                sortBy !== 'date_added',
+                !grouped,
+                retailerFilter !== null,
+                filter === 'expiring' || filter === 'expired',
+              ].filter(Boolean).length
+              return (
+                <button onClick={() => setFilterPanelOpen(!filterPanelOpen)}
+                  style={{ padding: '7px 14px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: filterPanelOpen || activeCount > 0 ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: filterPanelOpen || activeCount > 0 ? 'white' : '#888', boxShadow: filterPanelOpen || activeCount > 0 ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', whiteSpace: 'nowrap', flexShrink: 0, marginLeft: 'auto' }}>
+                  ⚙ Filters{activeCount > 0 ? ` (${activeCount})` : ''}
+                </button>
+              )
+            })()}
+          </div>
+        )}
+
+        {/* ── Expanded filter panel ── */}
+        {filterPanelOpen && !selectMode && (
+          <div style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', marginBottom: '12px', boxShadow: '0 4px 16px rgba(0,0,0,0.08)', border: '1.5px solid #f0f0f0' }}>
+            {/* Sort */}
+            <div style={{ marginBottom: '12px' }}>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 6px' }}>Sort by</p>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ border: '2px solid #eee', borderRadius: '8px', padding: '7px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', background: 'white', width: '100%' }}>
+                <option value="date_added">Date Added</option>
+                <option value="expiry">Expiry (soonest first)</option>
+                <option value="name">Name A–Z</option>
+                <option value="location">Location</option>
+                <option value="category">Category</option>
+              </select>
+            </div>
+            {/* Grouped toggle */}
+            <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>Group by name</span>
+              <div onClick={() => { setGrouped(!grouped); setExpandedId(null) }}
+                style={{ width: '44px', height: '24px', borderRadius: '12px', cursor: 'pointer', background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}>
+                <div style={{ position: 'absolute', top: '3px', width: '18px', height: '18px', borderRadius: '50%', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', left: grouped ? '23px' : '3px', transition: 'left 0.2s' }} />
+              </div>
+            </div>
+            {/* Retailer */}
+            {retailers.length > 0 && (
+              <div style={{ marginBottom: '12px' }}>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 6px' }}>Store</p>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button onClick={() => setRetailerFilter(null)} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: !retailerFilter ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#f0f0f0', color: !retailerFilter ? 'white' : '#888' }}>All</button>
+                  {retailers.map(r => (
+                    <button key={r} onClick={() => setRetailerFilter(r === retailerFilter ? null : r)} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: retailerFilter === r ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#f0f0f0', color: retailerFilter === r ? 'white' : '#888' }}>{r}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Expiring / Expired quick filters */}
+            <div>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 6px' }}>Quick filters</p>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button onClick={() => setFilter(filter === 'expiring' ? 'all' : 'expiring')} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: filter === 'expiring' ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#f0f0f0', color: filter === 'expiring' ? 'white' : '#888' }}>
+                  ⏰ Expiring{expiringCount > 0 ? ` (${expiringCount})` : ''}
+                </button>
+                <button onClick={() => setFilter(filter === 'expired' ? 'all' : 'expired')} style={{ padding: '5px 12px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', background: filter === 'expired' ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : '#f0f0f0', color: filter === 'expired' ? 'white' : '#888' }}>
+                  ⚠️ Expired{expiredCount > 0 ? ` (${expiredCount})` : ''}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Select mode controls ── */}
+        {selectMode && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <button onClick={selectAll} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)', padding: '7px 16px' }}>
+              Select All ({filtered.length})
+            </button>
+            <button onClick={clearSelection} style={{ ...btnBase, background: 'white', color: '#888', border: '1.5px solid #eee', padding: '7px 16px' }}>
+              Clear
+            </button>
           </div>
         )}
 
@@ -905,33 +974,6 @@ export default function InventoryPage() {
             )}
           </div>
         )}
-
-        {/* ── Sort & group / Select controls ── */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
-          {selectMode ? (
-            <>
-              <button onClick={selectAll} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)', padding: '7px 16px' }}>
-                Select All ({filtered.length})
-              </button>
-              <button onClick={clearSelection} style={{ ...btnBase, background: 'white', color: '#888', border: '1.5px solid #eee', padding: '7px 16px' }}>
-                Clear
-              </button>
-            </>
-          ) : (
-            <>
-              <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', background: 'white', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-                <option value="date_added">Date Added</option>
-                <option value="expiry">Expiry (soonest first)</option>
-                <option value="name">Name A–Z</option>
-                <option value="location">Location</option>
-                <option value="category">Category</option>
-              </select>
-              <button onClick={() => { setGrouped(!grouped); setExpandedId(null) }} style={{ padding: '6px 16px', borderRadius: '50px', border: 'none', cursor: 'pointer', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', background: grouped ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: grouped ? 'white' : '#888', boxShadow: grouped ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', transition: 'all 0.2s' }}>
-                {grouped ? '⊞ Grouped' : '☰ Ungrouped'}
-              </button>
-            </>
-          )}
-        </div>
 
         {/* ── Item list ── */}
         {grouped ? (
@@ -1148,6 +1190,15 @@ export default function InventoryPage() {
               <div>
                 <label style={editLabelStyle}>Retailer</label>
                 <input type="text" placeholder="e.g. Tesco" value={editingItem.retailer} onChange={e => setEditingItem({ ...editingItem, retailer: e.target.value })} style={editInputStyle} />
+              </div>
+
+              {/* Price */}
+              <div>
+                <label style={editLabelStyle}>Price (£)</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', color: '#bbb' }}>£</span>
+                  <input type="number" min={0} step={0.01} placeholder="0.00" value={editingItem.price} onChange={e => setEditingItem({ ...editingItem, price: e.target.value })} style={{ ...editInputStyle, maxWidth: '140px' }} />
+                </div>
               </div>
 
               {/* Status */}

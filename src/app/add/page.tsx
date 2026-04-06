@@ -562,6 +562,7 @@ export default function AddPage() {
         expiry_date: item.expiryDate || null,
         opened_at: item.openedAt || null,
         retailer: item.retailer || null,
+        price: item.price ?? null,
         receipt_item_id: receiptItemIdMap[item.id] ?? null,
         source: item.source,
         status: 'active' as const,
