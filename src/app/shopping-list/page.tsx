@@ -13,7 +13,6 @@ export default function ShoppingListPage() {
   const [newUnit,      setNewUnit]      = useState('item')
   const [saving,       setSaving]       = useState(false)
   const [toast,        setToast]        = useState<string | null>(null)
-  const [boughtPrompt, setBoughtPrompt] = useState<ShoppingListItem | null>(null)
 
   const UNITS = ['item', 'g', 'kg', 'ml', 'l', 'pack', 'tsp', 'tbsp', 'cup', 'clove', 'bunch']
 
@@ -60,19 +59,6 @@ export default function ShoppingListPage() {
     await supabase.from('shopping_list_items').update({ checked: newChecked }).eq('id', item.id)
     setItems(prev => prev.map(i => i.id === item.id ? { ...i, checked: newChecked } : i)
       .sort((a, b) => Number(a.checked) - Number(b.checked) || 0))
-    // When checking an item off, offer to add to inventory
-    if (newChecked) setBoughtPrompt(item)
-  }
-
-  async function addBoughtToInventory(item: ShoppingListItem) {
-    const { data: { session } } = await supabase.auth.getSession()
-    const userId = session?.user?.id ?? null
-    await supabase.from('inventory_items').insert({
-      name: item.name, remaining_quantity: item.quantity, quantity: item.quantity, quantity_original: item.quantity,
-      unit: item.unit, location: 'cupboard', source: 'manual', status: 'active', user_id: userId,
-    })
-    setBoughtPrompt(null)
-    showToast(`📦 ${item.name} added to inventory`)
   }
 
   async function deleteItem(id: string) {
@@ -136,26 +122,6 @@ export default function ShoppingListPage() {
       {toast && (
         <div style={{ position: 'fixed', bottom: '80px', left: '50%', transform: 'translateX(-50%)', background: '#2d2d2d', color: 'white', padding: '10px 20px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', zIndex: 2000, whiteSpace: 'nowrap', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
           {toast}
-        </div>
-      )}
-
-      {/* Bought → add to inventory prompt */}
-      {boughtPrompt && (
-        <div style={{ position: 'fixed', bottom: '90px', left: '50%', transform: 'translateX(-50%)', background: 'white', borderRadius: '16px', padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.15)', zIndex: 2100, minWidth: '280px', maxWidth: '340px', width: 'calc(100vw - 40px)' }}>
-          <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: '0 0 4px' }}>
-            Add to pantry?
-          </p>
-          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 14px' }}>
-            You bought <b style={{ color: '#2d2d2d' }}>{boughtPrompt.name}</b> — add it to your inventory?
-          </p>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={() => addBoughtToInventory(boughtPrompt)} style={{ ...btn('linear-gradient(135deg,#ff7043,#ff9a3c)'), flex: 1, padding: '10px' }}>
-              📦 Add to Pantry
-            </button>
-            <button onClick={() => setBoughtPrompt(null)} style={{ ...btn('white', '#888'), padding: '10px 16px' }}>
-              Skip
-            </button>
-          </div>
         </div>
       )}
 

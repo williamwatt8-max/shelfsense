@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { suggestLocation } from '@/lib/categoriser'
 import { StorageLocation } from '@/lib/types'
+import { compressImage } from '@/lib/compressImage'
 
 // ── Step / mode types ─────────────────────────────────────────────────────────
 
@@ -416,8 +417,10 @@ export default function AddPage() {
     if (!file) return
     setReceiptPreview(URL.createObjectURL(file))
     setReceiptLoading(true)
+    // Compress large photos before upload — prevents hitting the 5 MB API image limit
+    const uploadBlob = file.size > 1.4 * 1024 * 1024 ? await compressImage(file) : file
     const formData = new FormData()
-    formData.append('receipt', file)
+    formData.append('receipt', uploadBlob)
     try {
       const res = await fetch('/api/parse-receipt', { method: 'POST', body: formData })
       const result = await res.json()
@@ -909,8 +912,8 @@ export default function AddPage() {
                     </div>
 
                     {barcodeBatch.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
-                        {barcodeBatch.map(item => (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px', maxHeight: '220px', overflowY: 'auto' }}>
+                        {[...barcodeBatch].reverse().map(item => (
                           <div key={item.id} style={{ background: 'white', borderRadius: '12px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 1px 6px rgba(0,0,0,0.06)', animation: 'scan-pop 0.25s ease-out' }}>
                             <span style={{ fontSize: '16px', flexShrink: 0 }}>
                               {item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'found' ? '✅' : '⚠️'}

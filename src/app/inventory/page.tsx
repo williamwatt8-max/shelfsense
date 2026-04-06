@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
+import { compressImage } from '@/lib/compressImage'
 
 // ── Enrichment types ──────────────────────────────────────────────────────────
 type EnrichMode = 'barcode' | 'receipt' | null
@@ -637,8 +638,9 @@ export default function InventoryPage() {
     if (!file) return
     setEnrichReceiptLoading(true)
     setEnrichReceiptResult(null)
+    const uploadBlob = file.size > 1.4 * 1024 * 1024 ? await compressImage(file) : file
     const formData = new FormData()
-    formData.append('receipt', file)
+    formData.append('receipt', uploadBlob)
     try {
       const res = await fetch('/api/parse-receipt', { method: 'POST', body: formData })
       const data = await res.json()
