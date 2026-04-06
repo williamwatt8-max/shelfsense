@@ -136,11 +136,13 @@ export default function RecipesPage() {
   const [toast,          setToast]          = useState<string | null>(null)
   const [searchQuery,    setSearchQuery]    = useState('')
   const [editMode,       setEditMode]       = useState(false)
+  const [currentUserId,  setCurrentUserId]  = useState<string | null>(null)
 
   // Add / edit form state (shared between add_form phase and edit mode)
   const [draftName,         setDraftName]         = useState('')
   const [draftServings,     setDraftServings]      = useState('2')
   const [draftInstructions, setDraftInstructions]  = useState('')
+  const [draftIsPublic,     setDraftIsPublic]      = useState(false)
   const [draftIngredients,  setDraftIngredients]   = useState<DraftIngredient[]>([
     { id: '1', name: '', quantity: '', unit: 'g' }
   ])
@@ -166,19 +168,19 @@ export default function RecipesPage() {
     const { data: { session } } = await supabase.auth.getSession()
     const userId = session?.user?.id
     if (!userId) { setLoading(false); return }
+    setCurrentUserId(userId)
 
-    const { data: recipeRows } = await supabase
-      .from('recipes')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
+    // Fetch user's own recipes + public recipes from others
+    const [{ data: myRows }, { data: publicRows }] = await Promise.all([
+      supabase.from('recipes').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+      supabase.from('recipes').select('*').eq('is_public', true).neq('user_id', userId).order('created_at', { ascending: false }),
+    ])
 
-    if (!recipeRows) { setLoading(false); return }
+    const allRows = [...(myRows || []), ...(publicRows || [])]
+    if (allRows.length === 0) { setRecipes([]); setLoading(false); return }
 
-    const recipeIds = recipeRows.map((r: any) => r.id)
-    const { data: ingRows } = recipeIds.length > 0
-      ? await supabase.from('recipe_ingredients').select('*').in('recipe_id', recipeIds)
-      : { data: [] }
+    const recipeIds = allRows.map((r: any) => r.id)
+    const { data: ingRows } = await supabase.from('recipe_ingredients').select('*').in('recipe_id', recipeIds)
 
     const ingMap: Record<string, RecipeIngredient[]> = {}
     for (const ing of (ingRows || [])) {
@@ -186,7 +188,7 @@ export default function RecipesPage() {
       ingMap[ing.recipe_id].push(ing)
     }
 
-    setRecipes(recipeRows.map((r: any) => ({ ...r, ingredients: ingMap[r.id] || [] })))
+    setRecipes(allRows.map((r: any) => ({ ...r, ingredients: ingMap[r.id] || [] })))
     setLoading(false)
   }
 
@@ -211,7 +213,7 @@ export default function RecipesPage() {
     const userId = session?.user?.id ?? null
     const { data: recipeRow, error } = await supabase
       .from('recipes')
-      .insert({ name, base_servings: parseInt(draftServings) || 2, instructions: draftInstructions.trim() || null, source: 'manual', user_id: userId })
+      .insert({ name, base_servings: parseInt(draftServings) || 2, instructions: draftInstructions.trim() || null, source: 'manual', is_public: draftIsPublic, user_id: userId })
       .select().single()
     if (error || !recipeRow) { setSaving(false); alert('Error saving: ' + error?.message); return }
     if (validIngs.length > 0) {
@@ -271,6 +273,7 @@ export default function RecipesPage() {
     setDraftName(recipe.name)
     setDraftServings(String(recipe.base_servings))
     setDraftInstructions(recipe.instructions || '')
+    setDraftIsPublic(recipe.is_public ?? false)
     setDraftIngredients(recipe.ingredients.map(i => ({ id: i.id, name: i.name, quantity: String(i.quantity), unit: i.unit })))
     setEditMode(true)
   }
@@ -283,6 +286,7 @@ export default function RecipesPage() {
       name: draftName.trim(),
       base_servings: parseInt(draftServings) || 2,
       instructions: draftInstructions.trim() || null,
+      is_public: draftIsPublic,
     }).eq('id', selectedRecipe.id)
     // Replace ingredients: delete old, insert new
     await supabase.from('recipe_ingredients').delete().eq('recipe_id', selectedRecipe.id)
@@ -593,6 +597,8 @@ export default function RecipesPage() {
                     <p style={{ color: '#bbb', fontWeight: 700, fontSize: '12px', margin: 0 }}>
                       {recipe.base_servings} serving{recipe.base_servings !== 1 ? 's' : ''} · {recipe.ingredients.length} ingredient{recipe.ingredients.length !== 1 ? 's' : ''}
                       {recipe.source === 'scanned' && ' · 📷 scanned'}
+                      {recipe.is_public && recipe.user_id !== currentUserId && <span style={{ color: '#4caf50' }}> · 🌍 community</span>}
+                      {recipe.is_public && recipe.user_id === currentUserId && <span style={{ color: '#1e88e5' }}> · 🌍 public</span>}
                     </p>
                   </div>
                   <span style={{ color: '#ddd', fontSize: '20px' }}>›</span>
@@ -651,6 +657,17 @@ export default function RecipesPage() {
                 value={draftInstructions}
                 onChange={e => setDraftInstructions(e.target.value)}
               />
+            </div>
+
+            {/* Public toggle */}
+            <div style={{ ...card, marginBottom: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setDraftIsPublic(!draftIsPublic)}>
+              <div>
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: '0 0 2px' }}>Make this recipe public</p>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#aaa', margin: 0 }}>Visible to all ShelfSense users</p>
+              </div>
+              <div style={{ width: '44px', height: '24px', borderRadius: '12px', background: draftIsPublic ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', position: 'relative', flexShrink: 0, transition: 'background 0.2s' }}>
+                <div style={{ position: 'absolute', top: '3px', width: '18px', height: '18px', borderRadius: '50%', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', left: draftIsPublic ? '23px' : '3px', transition: 'left 0.2s' }} />
+              </div>
             </div>
 
             <button
@@ -799,6 +816,16 @@ export default function RecipesPage() {
                 <div style={{ marginBottom: '14px' }}>
                   <label style={lbl}>Instructions (optional)</label>
                   <textarea rows={3} style={{ ...inp, resize: 'vertical' as const, lineHeight: 1.5 }} value={draftInstructions} onChange={e => setDraftInstructions(e.target.value)} />
+                </div>
+                {/* Public toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', cursor: 'pointer' }} onClick={() => setDraftIsPublic(!draftIsPublic)}>
+                  <div>
+                    <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 1px' }}>Make public</p>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#aaa', margin: 0 }}>Visible to all users</p>
+                  </div>
+                  <div style={{ width: '40px', height: '22px', borderRadius: '11px', background: draftIsPublic ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', position: 'relative', flexShrink: 0, transition: 'background 0.2s' }}>
+                    <div style={{ position: 'absolute', top: '2px', width: '18px', height: '18px', borderRadius: '50%', background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)', left: draftIsPublic ? '20px' : '2px', transition: 'left 0.2s' }} />
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button onClick={saveRecipeEdits} disabled={saving || !draftName.trim()}

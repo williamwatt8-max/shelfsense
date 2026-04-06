@@ -106,6 +106,7 @@ export type Recipe = {
   instructions: string | null
   source: 'manual' | 'scanned'
   raw_text: string | null
+  is_public: boolean
   created_at: string
   updated_at: string
 }

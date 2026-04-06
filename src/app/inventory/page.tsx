@@ -63,6 +63,7 @@ export default function InventoryPage() {
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
   const [retailerFilter, setRetailerFilter] = useState<string | null>(null)
   const [toast, setToast]               = useState<string | null>(null)
+  const [fabOpen, setFabOpen]                   = useState(false)
   const [voiceListening, setVoiceListening]     = useState(false)
   const [voiceProcessing, setVoiceProcessing]   = useState(false)
   const [voiceTranscript, setVoiceTranscript]   = useState<string | null>(null)
@@ -786,16 +787,6 @@ export default function InventoryPage() {
             <button onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); setExpandedId(null) }} style={{ ...btnBase, background: selectMode ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: selectMode ? 'white' : '#888', boxShadow: selectMode ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', padding: '10px 16px', fontSize: '14px' }}>
               ☑ Select
             </button>
-            {!selectMode && (
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <a href="/add" style={{ background: 'white', color: '#ff7043', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 14px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 2px 10px rgba(0,0,0,0.08)', whiteSpace: 'nowrap', border: '1.5px solid rgba(255,112,67,0.2)' }}>
-                  + Add
-                </a>
-                <a href="/" style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '15px', padding: '10px 14px', borderRadius: '50px', textDecoration: 'none', boxShadow: '0 4px 16px rgba(255,112,67,0.4)', whiteSpace: 'nowrap' }}>
-                  📷 Scan
-                </a>
-              </div>
-            )}
           </div>
         </div>
 
@@ -1183,6 +1174,54 @@ export default function InventoryPage() {
             </div>
           </div>
         </div>
+      )}
+      {/* ── FAB ── */}
+      {!selectMode && (
+        <div style={{ position: 'fixed', bottom: '28px', right: '20px', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+          {fabOpen && (
+            <>
+              <a
+                href="/add?mode=receipt"
+                onClick={() => setFabOpen(false)}
+                style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'white', borderRadius: '50px', padding: '10px 18px', textDecoration: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.14)', fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', whiteSpace: 'nowrap' }}
+              >
+                <span style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>🧾</span>
+                Scan receipt
+              </a>
+              <a
+                href="/add?mode=barcode"
+                onClick={() => setFabOpen(false)}
+                style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'white', borderRadius: '50px', padding: '10px 18px', textDecoration: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.14)', fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', whiteSpace: 'nowrap' }}
+              >
+                <span style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📷</span>
+                Scan barcode
+              </a>
+              <a
+                href="/add"
+                onClick={() => setFabOpen(false)}
+                style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'white', borderRadius: '50px', padding: '10px 18px', textDecoration: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.14)', fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', whiteSpace: 'nowrap' }}
+              >
+                <span style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>📝</span>
+                Add item
+              </a>
+            </>
+          )}
+          {/* Main FAB button */}
+          <button
+            onClick={() => setFabOpen(!fabOpen)}
+            style={{ width: '56px', height: '56px', borderRadius: '50%', border: 'none', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '28px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 6px 24px rgba(255,112,67,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform 0.2s', transform: fabOpen ? 'rotate(45deg)' : 'rotate(0deg)' }}
+          >
+            +
+          </button>
+        </div>
+      )}
+
+      {/* FAB backdrop */}
+      {fabOpen && (
+        <div
+          onClick={() => setFabOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 199, background: 'rgba(0,0,0,0.25)' }}
+        />
       )}
     </main>
   )

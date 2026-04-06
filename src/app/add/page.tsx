@@ -97,8 +97,9 @@ export default function AddPage() {
   const streamRef        = useRef<MediaStream | null>(null)
   const scanIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null)
   const zxingControlsRef = useRef<{ stop: () => void } | null>(null)
-  const lastBarcodeRef   = useRef('')
-  const lastScanTimeRef  = useRef(0)
+  const lastBarcodeRef    = useRef('')
+  const lastScanTimeRef   = useRef(0)
+  const recognitionRef    = useRef<any>(null)
 
   // ── Receipt state ─────────────────────────────────────────────────────────
   const [receiptLoading,   setReceiptLoading]   = useState(false)
@@ -110,6 +111,15 @@ export default function AddPage() {
   const [rVoiceFilled,     setRVoiceFilled]     = useState<{ name: string; date: string }[]>([])
   const [rVoiceError,      setRVoiceError]      = useState<string | null>(null)
   const receiptFileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const m = params.get('mode') as Mode | null
+    if (m && ['receipt', 'barcode', 'manual', 'voice'].includes(m)) {
+      goToCapture(m)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => { return () => stopCamera() }, [])
 
@@ -198,35 +208,38 @@ export default function AddPage() {
 
   // ── Voice add ─────────────────────────────────────────────────────────────
 
+  function stopVoice() {
+    recognitionRef.current?.stop()
+  }
+
   function startVoice() {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     if (!SR) { setVoiceError("Voice input isn't supported in this browser. Try Chrome."); return }
     const recognition = new SR()
+    recognitionRef.current = recognition
     recognition.lang = 'en-GB'
     recognition.continuous = true
     recognition.interimResults = true
     recognition.maxAlternatives = 1
     let finalTranscript = ''
-    let silenceTimer: ReturnType<typeof setTimeout> | null = null
-    const absoluteTimer = setTimeout(() => recognition.stop(), 10000)
+    const absoluteTimer = setTimeout(() => recognition.stop(), 30000)
     setVoiceListening(true); setVoiceError(null); setVoiceFilled(false); setVoiceTranscript('')
     recognition.start()
     recognition.onresult = (e: any) => {
-      if (silenceTimer) clearTimeout(silenceTimer)
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' '
       }
       setVoiceTranscript(finalTranscript.trim())
-      silenceTimer = setTimeout(() => recognition.stop(), 2500)
     }
     recognition.onerror = (e: any) => {
       if (e.error !== 'no-speech') {
-        clearTimeout(absoluteTimer); if (silenceTimer) clearTimeout(silenceTimer)
+        clearTimeout(absoluteTimer)
         setVoiceListening(false); setVoiceError("Couldn't hear you — try again.")
       }
     }
     recognition.onend = async () => {
-      clearTimeout(absoluteTimer); if (silenceTimer) clearTimeout(silenceTimer)
+      clearTimeout(absoluteTimer)
+      recognitionRef.current = null
       setVoiceListening(false)
       const transcript = finalTranscript.trim()
       if (!transcript) { setVoiceError('No speech detected — tap the mic and try again.'); return }
@@ -235,22 +248,29 @@ export default function AddPage() {
         const res = await fetch('/api/voice-add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript }) })
         const r = await res.json()
         if (r.error) throw new Error(r.error)
-        setForm({
-          name: r.name || '',
-          itemCount: String(r.count ?? 1),
-          amountPerUnit: r.amount_per_unit != null ? String(r.amount_per_unit) : '',
-          unit: r.unit || 'item',
-          location: (r.location as StorageLocation) || suggestLocation(r.name || '', r.category || ''),
-          category: r.category || '',
-          expiryDate: r.expiry_date || '',
-          retailer: r.retailer || '',
-          purchaseDate: '',
-          opened: !!r.opened_at,
-          openedAt: r.opened_at || '',
-        })
-        setVoiceFilled(true)
+        const parsed: any[] = Array.isArray(r) ? r : [r]
+        const newItems: ReviewBatchItem[] = parsed.map((item: any) => ({
+          id: `voice-${Date.now()}-${Math.random()}`,
+          source: 'voice' as Mode,
+          name: item.name || '',
+          count: String(item.count ?? 1),
+          amountPerUnit: item.amount_per_unit != null ? String(item.amount_per_unit) : '',
+          unit: item.unit || 'item',
+          location: (item.location as StorageLocation) || suggestLocation(item.name || '', item.category || ''),
+          category: item.category || '',
+          expiryDate: item.expiry_date || '',
+          retailer: item.retailer || '',
+          price: null,
+          selected: true,
+          openedAt: item.opened_at || '',
+        }))
+        setReviewBatch(prev => [...prev, ...newItems])
+        setStep('review')
+        setVoiceProcessing(false)
+        return
       } catch { setVoiceError('Could not understand — try speaking more clearly.') }
       setVoiceProcessing(false)
+
     }
   }
 
@@ -432,7 +452,7 @@ export default function AddPage() {
     const recognition = new SR()
     recognition.lang = 'en-GB'; recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1
     let finalTranscript = ''; let silenceTimer: ReturnType<typeof setTimeout> | null = null
-    const absoluteTimer = setTimeout(() => recognition.stop(), 8000)
+    const absoluteTimer = setTimeout(() => recognition.stop(), 10000)
     setRVoiceListening(true); setRVoiceFilled([]); setRVoiceError(null)
     recognition.start()
     recognition.onresult = (e: any) => {
@@ -454,26 +474,28 @@ export default function AddPage() {
       const transcript = finalTranscript.trim()
       if (!transcript) { setRVoiceError('No speech detected — try again.'); return }
       setRVoiceProcessing(true)
-      const receiptNames = reviewBatch.filter(i => i.source === 'receipt').map(i => i.name)
+      // Build numbered items list from receipt items (1-based index matching reviewBatch positions)
+      const receiptIndices: { batchIndex: number; index: number; name: string }[] = []
+      let counter = 1
+      reviewBatch.forEach((item, batchIndex) => {
+        if (item.source === 'receipt') {
+          receiptIndices.push({ batchIndex, index: counter, name: item.name })
+          counter++
+        }
+      })
+      const numberedItems = receiptIndices.map(r => ({ index: r.index, name: r.name }))
       try {
-        const res = await fetch('/api/voice-expiry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript, items: receiptNames }) })
+        const res = await fetch('/api/voice-expiry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript, items: numberedItems }) })
         const result = await res.json()
         if (result.error) throw new Error(result.error)
         const filled: { name: string; date: string }[] = []
         setReviewBatch(prev => {
           const updated = [...prev]
-          for (const match of (result.matches || [])) {
-            const matchName = match.item_name.toLowerCase()
-            const idx = updated.findIndex(i =>
-              i.source === 'receipt' && (
-                i.name.toLowerCase() === matchName ||
-                i.name.toLowerCase().includes(matchName) ||
-                matchName.includes(i.name.toLowerCase())
-              )
-            )
-            if (idx !== -1 && match.expiry_date) {
-              updated[idx] = { ...updated[idx], expiryDate: match.expiry_date }
-              filled.push({ name: updated[idx].name, date: match.expiry_date })
+          for (const assignment of (result.assignments || [])) {
+            const ri = receiptIndices.find(r => r.index === assignment.index)
+            if (ri && assignment.expiry_date) {
+              updated[ri.batchIndex] = { ...updated[ri.batchIndex], expiryDate: assignment.expiry_date }
+              filled.push({ name: updated[ri.batchIndex].name, date: assignment.expiry_date })
             }
           }
           return updated
@@ -763,27 +785,46 @@ export default function AddPage() {
           <>
             {/* ── Voice capture ── */}
             {mode === 'voice' && (
-              <>
-                <div style={{ background: 'white', borderRadius: '16px', padding: '20px', marginBottom: '16px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
-                  <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: '0 0 12px' }}>
-                    Say something like: "6 cans of Heinz baked beans, use by March"
-                  </p>
-                  <button onClick={startVoice} disabled={voiceListening || voiceProcessing}
-                    style={{ ...btnBase, width: '100%', justifyContent: 'center', display: 'flex', alignItems: 'center', gap: '10px', background: voiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px', boxShadow: voiceListening ? '0 6px 20px rgba(255,68,68,0.4)' : '0 6px 20px rgba(255,112,67,0.35)', opacity: voiceProcessing ? 0.7 : 1 }}>
-                    <span style={{ fontSize: '22px', animation: voiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
-                    {voiceListening ? 'Listening...' : voiceProcessing ? 'Understanding...' : 'Tap to speak'}
+              <div style={{ background: 'white', borderRadius: '16px', padding: '24px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)', textAlign: 'center' }}>
+                <div style={{ fontSize: '48px', marginBottom: '8px' }}>🎤</div>
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '22px', color: '#2d2d2d', margin: '0 0 6px' }}>
+                  {voiceListening ? 'Recording…' : voiceProcessing ? 'Understanding…' : 'Voice Add'}
+                </p>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#bbb', margin: '0 0 20px', lineHeight: 1.5 }}>
+                  {voiceListening
+                    ? 'Speak your items, then tap Stop when done'
+                    : 'Say one or more items, then tap Stop. e.g. "6 cans of Coke, milk 2 litres expiring Friday"'}
+                </p>
+
+                {!voiceListening && !voiceProcessing && (
+                  <button onClick={startVoice}
+                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontSize: '20px' }}>🎤</span> Tap to speak
                   </button>
-                  {voiceTranscript && !voiceListening && (
-                    <div style={{ marginTop: '12px', background: '#f9f9f9', borderRadius: '10px', padding: '10px 14px' }}>
-                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '0 0 4px' }}>You said:</p>
-                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
-                    </div>
-                  )}
-                  {voiceFilled && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#4caf50', margin: '10px 0 0' }}>✅ Fields filled in below — check and add</p>}
-                  {voiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '10px 0 0' }}>😕 {voiceError}</p>}
-                </div>
-                {itemFormJSX}
-              </>
+                )}
+
+                {voiceListening && (
+                  <button onClick={stopVoice}
+                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,68,68,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>
+                    <span style={{ fontSize: '20px' }}>🔴</span> Stop Recording
+                  </button>
+                )}
+
+                {voiceProcessing && (
+                  <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', color: '#ff7043', marginTop: '4px' }}>
+                    Parsing items…
+                  </div>
+                )}
+
+                {voiceTranscript && !voiceListening && !voiceProcessing && (
+                  <div style={{ marginTop: '16px', background: '#f9f9f9', borderRadius: '10px', padding: '10px 14px', textAlign: 'left' }}>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '0 0 4px' }}>You said:</p>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
+                  </div>
+                )}
+
+                {voiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '16px 0 0' }}>😕 {voiceError}</p>}
+              </div>
             )}
 
             {/* ── Manual capture ── */}
@@ -922,16 +963,29 @@ export default function AddPage() {
 
             {/* Voice expiry button (for receipt items) */}
             {reviewBatch.some(i => i.source === 'receipt') && (
-              <div style={{ marginBottom: '16px' }}>
+              <div style={{ marginBottom: '16px', background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}>
+                {/* Numbered items list */}
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>Set expiry dates by voice</p>
+                <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  {reviewBatch.filter(i => i.source === 'receipt').map((item, idx) => (
+                    <p key={item.id} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#666', margin: 0 }}>
+                      <span style={{ color: '#ff7043', fontWeight: 800 }}>{idx + 1}.</span> {item.name}
+                      {item.expiryDate && <span style={{ color: '#4caf50', marginLeft: '6px' }}>→ {new Date(item.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>}
+                    </p>
+                  ))}
+                </div>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '0 0 10px' }}>
+                  Say e.g. "1 tomorrow, 3 Sunday, 5 next week"
+                </p>
                 <button onClick={startReceiptVoiceExpiry} disabled={rVoiceListening || rVoiceProcessing}
                   style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '10px', background: rVoiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 16px rgba(255,112,67,0.35)', opacity: rVoiceProcessing ? 0.7 : 1 }}>
                   <span style={{ fontSize: '18px', animation: rVoiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
-                  {rVoiceListening ? 'Listening...' : rVoiceProcessing ? 'Understanding...' : 'Set expiry dates by voice'}
+                  {rVoiceListening ? 'Listening...' : rVoiceProcessing ? 'Understanding...' : 'Speak expiry dates'}
                 </button>
-                {rVoiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '6px 0 0' }}>😕 {rVoiceError}</p>}
+                {rVoiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '8px 0 0' }}>😕 {rVoiceError}</p>}
                 {rVoiceFilled.length > 0 && (
-                  <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '12px', padding: '10px 14px', marginTop: '10px' }}>
-                    <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#388e3c', margin: '0 0 6px' }}>✅ {rVoiceFilled.length} date{rVoiceFilled.length !== 1 ? 's' : ''} filled in</p>
+                  <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '10px', padding: '8px 12px', marginTop: '10px' }}>
+                    <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#388e3c', margin: '0 0 4px' }}>✅ {rVoiceFilled.length} date{rVoiceFilled.length !== 1 ? 's' : ''} filled in</p>
                     {rVoiceFilled.map((f, i) => <p key={i} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#555', margin: '2px 0' }}>{f.name} → {new Date(f.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p>)}
                   </div>
                 )}
