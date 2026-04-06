@@ -10,7 +10,7 @@ import { compressImage } from '@/lib/compressImage'
 
 type Step = 'choose' | 'capture' | 'review' | 'done'
 type Mode = 'manual' | 'voice' | 'barcode' | 'receipt'
-type LookupStatus = 'loading' | 'found' | 'not_found' | 'error'
+type LookupStatus = 'loading' | 'found' | 'not_found' | 'error' | 'known'
 
 // ── Unified review item (all sources merge into this) ─────────────────────────
 
@@ -31,6 +31,7 @@ type ReviewBatchItem = {
   // barcode-specific
   barcode?: string
   lookupStatus?: LookupStatus
+  isKnown?: boolean
   // receipt-specific
   confidence?: number
 }
@@ -374,9 +375,39 @@ export default function AddPage() {
       id, source: 'barcode', name: barcode, count: '1', amountPerUnit: '',
       unit: 'item', location: 'cupboard', category: '', expiryDate: '',
       price: null, selected: true, retailer: '', openedAt: '',
-      barcode, lookupStatus: 'loading',
+      barcode, lookupStatus: 'loading', isKnown: false,
     }
     setBarcodeBatch(prev => [...prev, placeholder])
+
+    // 1. Check known_products first (user's learned memory)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const userId = session?.user?.id
+      if (userId) {
+        const { data: known } = await supabase
+          .from('known_products')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('barcode', barcode)
+          .maybeSingle()
+        if (known) {
+          setBarcodeBatch(prev => prev.map(item => item.id !== id ? item : {
+            ...item,
+            name: known.name,
+            amountPerUnit: known.amount_per_unit != null ? String(known.amount_per_unit) : '',
+            unit: known.unit,
+            category: known.category || '',
+            retailer: known.usual_retailer || '',
+            location: suggestLocation(known.name, known.category || ''),
+            lookupStatus: 'known',
+            isKnown: true,
+          }))
+          return
+        }
+      }
+    } catch { /* fall through to Open Food Facts */ }
+
+    // 2. Fallback: Open Food Facts
     try {
       const res = await fetch('/api/barcode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ barcode }) })
       const result = await res.json()
@@ -588,6 +619,27 @@ export default function AddPage() {
     const { error } = await supabase.from('inventory_items').insert(inserts)
     setSaving(false)
     if (error) { alert('Error saving: ' + error.message); return }
+
+    // Learn from barcode-scanned items: upsert to known_products
+    if (userId) {
+      const barcodeItems = toSave.filter(i => i.barcode)
+      if (barcodeItems.length > 0) {
+        const upsertData = barcodeItems.map(i => ({
+          user_id: userId,
+          barcode: i.barcode!,
+          name: i.name.trim() || i.barcode!,
+          category: i.category || null,
+          amount_per_unit: i.amountPerUnit ? parseFloat(i.amountPerUnit) : null,
+          unit: i.unit,
+          usual_retailer: i.retailer || null,
+          last_seen_at: new Date().toISOString(),
+          times_purchased: 1,
+        }))
+        // On conflict, update name/category/amount/unit/retailer and increment times_purchased
+        await supabase.from('known_products').upsert(upsertData, { onConflict: 'user_id,barcode' })
+      }
+    }
+
     setSavedCount(toSave.length)
     setReviewBatch([])
     setStep('done')
@@ -916,7 +968,7 @@ export default function AddPage() {
                         {[...barcodeBatch].reverse().map(item => (
                           <div key={item.id} style={{ background: 'white', borderRadius: '12px', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '10px', boxShadow: '0 1px 6px rgba(0,0,0,0.06)', animation: 'scan-pop 0.25s ease-out' }}>
                             <span style={{ fontSize: '16px', flexShrink: 0 }}>
-                              {item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'found' ? '✅' : '⚠️'}
+                              {item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'known' ? '⭐' : item.lookupStatus === 'found' ? '✅' : '⚠️'}
                             </span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -945,10 +997,16 @@ export default function AddPage() {
                   Take a photo of your grocery receipt. AI extracts all items automatically.
                 </p>
                 {receiptPreview && <img src={receiptPreview} alt="Receipt" style={{ maxWidth: '180px', maxHeight: '160px', borderRadius: '16px', marginBottom: '16px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }} />}
-                <label style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '18px', padding: '16px 36px', borderRadius: '50px', cursor: 'pointer', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', display: 'inline-block', position: 'relative' }}>
-                  {receiptLoading ? '✨ Scanning...' : '📷 Choose Receipt Photo'}
-                  <input ref={receiptFileRef} type="file" accept="image/*" capture="environment" onChange={handleReceiptFile} disabled={receiptLoading} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
-                </label>
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  <label style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '17px', padding: '14px 28px', borderRadius: '50px', cursor: receiptLoading ? 'default' : 'pointer', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', display: 'inline-block', position: 'relative', opacity: receiptLoading ? 0.7 : 1 }}>
+                    📷 Take Photo
+                    <input type="file" accept="image/*" capture="environment" onChange={handleReceiptFile} disabled={receiptLoading} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+                  </label>
+                  <label style={{ background: 'white', color: '#ff7043', border: '2px solid #ff7043', fontFamily: "'Fredoka One',cursive", fontSize: '17px', padding: '14px 28px', borderRadius: '50px', cursor: receiptLoading ? 'default' : 'pointer', display: 'inline-block', position: 'relative', opacity: receiptLoading ? 0.7 : 1 }}>
+                    🖼 From Library
+                    <input ref={receiptFileRef} type="file" accept="image/*" onChange={handleReceiptFile} disabled={receiptLoading} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+                  </label>
+                </div>
                 {receiptLoading && <p style={{ color: '#ff7043', fontWeight: 700, fontSize: '15px', fontFamily: "'Nunito',sans-serif", marginTop: '12px' }}>AI is reading your receipt…</p>}
               </div>
             )}
@@ -1034,13 +1092,16 @@ export default function AddPage() {
                     ) : (
                       <span style={{ fontSize: '15px', flexShrink: 0 }}>
                         {item.source === 'barcode'
-                          ? (item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'found' ? '✅' : '⚠️')
+                          ? (item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'known' ? '⭐' : item.lookupStatus === 'found' ? '✅' : '⚠️')
                           : item.source === 'voice' ? '🎤' : '📝'}
                       </span>
                     )}
                     <input type="text" value={item.name}
                       onChange={e => updateReviewItem(index, { name: e.target.value })}
                       style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', minWidth: 0 }} />
+                    {item.isKnown && (
+                      <span style={{ background: 'rgba(255,193,7,0.15)', color: '#e6a817', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⭐ known</span>
+                    )}
                     {item.confidence != null && item.confidence < 0.8 && (
                       <span style={{ background: 'rgba(255,179,71,0.15)', color: '#e08000', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⚠ low</span>
                     )}

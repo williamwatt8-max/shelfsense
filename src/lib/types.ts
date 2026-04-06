@@ -124,6 +124,20 @@ export type RecipeIngredient = {
   created_at: string
 }
 
+export type KnownProduct = {
+  id: string
+  user_id: string
+  barcode: string
+  name: string
+  category: string | null
+  amount_per_unit: number | null
+  unit: string
+  usual_retailer: string | null
+  times_purchased: number
+  last_seen_at: string
+  created_at: string
+}
+
 export type ShoppingListItem = {
   id: string
   user_id: string | null
