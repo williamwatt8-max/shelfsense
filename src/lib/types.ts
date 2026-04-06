@@ -53,6 +53,8 @@ export type InventoryItem = {
   opened_at: string | null
   opened_expiry_days: number | null
   price: number | null
+  price_source: 'manual' | 'receipt' | 'barcode' | 'inferred' | null
+  barcode: string | null
   status: InventoryStatus
   created_at: string
   updated_at: string

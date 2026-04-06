@@ -563,6 +563,8 @@ export default function AddPage() {
         opened_at: item.openedAt || null,
         retailer: item.retailer || null,
         price: item.price ?? null,
+        price_source: item.price != null ? (item.source === 'receipt' ? 'receipt' : item.source === 'barcode' ? 'barcode' : 'manual') : null,
+        barcode: item.barcode ?? null,
         receipt_item_id: receiptItemIdMap[item.id] ?? null,
         source: item.source,
         status: 'active' as const,

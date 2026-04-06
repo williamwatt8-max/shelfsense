@@ -1,10 +1,25 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { InventoryItem } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
+
+// ── Enrichment types ──────────────────────────────────────────────────────────
+type EnrichMode = 'barcode' | 'receipt' | null
+type EnrichBarcodeData = {
+  found: boolean
+  name: string; category: string; count: number
+  amount_per_unit: number | null; unit: string; barcode: string
+}
+type EnrichReceiptLine = {
+  normalized_name: string; price: number | null; unit: string
+  quantity: number; category: string
+}
+type EnrichReceiptData = {
+  retailer_name: string; total: number | null; items: EnrichReceiptLine[]
+}
 
 type GroupedItem = {
   name: string
@@ -32,6 +47,8 @@ type EditingItemState = {
   opened_at: string
   retailer: string
   price: string
+  price_source: string
+  barcode: string
   status: string
 }
 type VoiceAction = {
@@ -64,6 +81,25 @@ export default function InventoryPage() {
   const [filterPanelOpen, setFilterPanelOpen] = useState(false)
   const [toast, setToast]               = useState<string | null>(null)
   const [fabOpen, setFabOpen]                   = useState(false)
+
+  // ── Enrichment state (in edit modal) ──────────────────────────────────────
+  const [enrichMode,           setEnrichMode]           = useState<EnrichMode>(null)
+  const [enrichBarcodeInput,   setEnrichBarcodeInput]   = useState('')
+  const [enrichBarcodeLoading, setEnrichBarcodeLoading] = useState(false)
+  const [enrichBarcodeResult,  setEnrichBarcodeResult]  = useState<EnrichBarcodeData | null>(null)
+  const [enrichCameraActive,   setEnrichCameraActive]   = useState(false)
+  const [enrichCameraError,    setEnrichCameraError]    = useState<string | null>(null)
+  const [enrichScanFlash,      setEnrichScanFlash]      = useState(false)
+  const [enrichReceiptLoading, setEnrichReceiptLoading] = useState(false)
+  const [enrichReceiptResult,  setEnrichReceiptResult]  = useState<EnrichReceiptData | null>(null)
+  const [enrichApplied,        setEnrichApplied]        = useState<string | null>(null)
+  const enrichVideoRef    = useRef<HTMLVideoElement>(null)
+  const enrichStreamRef   = useRef<MediaStream | null>(null)
+  const enrichScanRef     = useRef<ReturnType<typeof setInterval> | null>(null)
+  const enrichZxingRef    = useRef<{ stop: () => void } | null>(null)
+  const enrichLastBarcode = useRef('')
+  const enrichReceiptRef  = useRef<HTMLInputElement>(null)
+
   const [voiceListening, setVoiceListening]     = useState(false)
   const [voiceProcessing, setVoiceProcessing]   = useState(false)
   const [voiceTranscript, setVoiceTranscript]   = useState<string | null>(null)
@@ -186,6 +222,9 @@ export default function InventoryPage() {
   async function saveEdit() {
     if (!editingItem) return
     const editQty = parseFloat(editingItem.quantity) || 0
+    // Determine price_source: if price changed manually (no enrichment source), mark as 'manual'
+    const newPrice = editingItem.price !== '' ? parseFloat(editingItem.price) : null
+    const priceSource = editingItem.price_source || (newPrice != null ? 'manual' : null)
     await supabase.from('inventory_items').update({
       name: editingItem.name.trim(),
       category: editingItem.category || null,
@@ -198,15 +237,19 @@ export default function InventoryPage() {
       expiry_date: editingItem.expiry_date || null,
       opened_at: editingItem.opened_at || null,
       retailer: editingItem.retailer.trim() || null,
-      price: editingItem.price !== '' ? parseFloat(editingItem.price) : null,
+      price: newPrice,
+      price_source: priceSource,
+      barcode: editingItem.barcode || null,
       status: editingItem.status,
     }).eq('id', editingItem.id)
+    resetEnrichState()
     setEditingItem(null)
     setEditModalOpen(false)
     loadItems()
   }
 
   function cancelEdit() {
+    resetEnrichState()
     setEditingItem(null)
     setEditModalOpen(false)
   }
@@ -432,7 +475,165 @@ export default function InventoryPage() {
     setTimeout(() => setToast(null), 2500)
   }
 
-  // ── Filtering & sorting ────────────────────────────────────────��──────────
+  // ── Enrichment helpers ────────────────────────────────────────────────────
+
+  function resetEnrichState() {
+    stopEnrichCamera()
+    setEnrichMode(null)
+    setEnrichBarcodeInput('')
+    setEnrichBarcodeLoading(false)
+    setEnrichBarcodeResult(null)
+    setEnrichCameraActive(false)
+    setEnrichCameraError(null)
+    setEnrichReceiptLoading(false)
+    setEnrichReceiptResult(null)
+    setEnrichApplied(null)
+  }
+
+  function stopEnrichCamera() {
+    try { enrichZxingRef.current?.stop() } catch {}
+    enrichZxingRef.current = null
+    if (enrichStreamRef.current) {
+      enrichStreamRef.current.getTracks().forEach(t => t.stop())
+      enrichStreamRef.current = null
+    }
+    if (enrichScanRef.current) { clearInterval(enrichScanRef.current); enrichScanRef.current = null }
+    enrichLastBarcode.current = ''
+    setEnrichCameraActive(false)
+  }
+
+  async function startEnrichCamera() {
+    setEnrichCameraError(null)
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setEnrichCameraError('Camera not available on this device.')
+      return
+    }
+    const NativeBD = (window as any).BarcodeDetector
+    if (NativeBD) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        })
+        enrichStreamRef.current = stream
+        setEnrichCameraActive(true)
+        await new Promise<void>(r => setTimeout(r, 80))
+        if (!enrichVideoRef.current) return
+        enrichVideoRef.current.srcObject = stream
+        await enrichVideoRef.current.play().catch(() => {})
+        const detector = new NativeBD({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] })
+        enrichScanRef.current = setInterval(async () => {
+          const vid = enrichVideoRef.current
+          if (!vid || vid.readyState < 2) return
+          try {
+            const codes = await detector.detect(vid)
+            if (codes.length > 0) {
+              const bc = codes[0].rawValue
+              if (bc === enrichLastBarcode.current) return
+              enrichLastBarcode.current = bc
+              stopEnrichCamera()
+              setEnrichScanFlash(true); setTimeout(() => setEnrichScanFlash(false), 280)
+              setEnrichBarcodeInput(bc)
+              lookupEnrichBarcode(bc)
+            }
+          } catch {}
+        }, 400)
+      } catch {
+        setEnrichCameraError("Couldn't access camera. Check permissions.")
+        setEnrichCameraActive(false)
+      }
+    } else {
+      setEnrichCameraActive(true)
+      await new Promise<void>(r => setTimeout(r, 80))
+      if (!enrichVideoRef.current) { setEnrichCameraActive(false); return }
+      try {
+        const { BrowserMultiFormatReader } = await import('@zxing/browser')
+        const reader = new BrowserMultiFormatReader()
+        const controls = await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } } },
+          enrichVideoRef.current,
+          (result) => {
+            if (!result) return
+            const bc = result.getText()
+            if (bc === enrichLastBarcode.current) return
+            enrichLastBarcode.current = bc
+            stopEnrichCamera()
+            setEnrichBarcodeInput(bc)
+            lookupEnrichBarcode(bc)
+          }
+        )
+        enrichZxingRef.current = controls
+      } catch {
+        setEnrichCameraError("Couldn't access camera. Check permissions.")
+        setEnrichCameraActive(false)
+      }
+    }
+  }
+
+  async function lookupEnrichBarcode(barcode: string) {
+    if (!barcode.trim()) return
+    setEnrichBarcodeLoading(true)
+    setEnrichBarcodeResult(null)
+    try {
+      const res = await fetch('/api/barcode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ barcode }),
+      })
+      const data = await res.json()
+      setEnrichBarcodeResult({ ...data, barcode })
+    } catch {
+      setEnrichBarcodeResult({ found: false, name: '', category: '', count: 1, amount_per_unit: null, unit: 'item', barcode })
+    }
+    setEnrichBarcodeLoading(false)
+  }
+
+  function applyBarcodeEnrichment(data: EnrichBarcodeData) {
+    if (!editingItem) return
+    setEditingItem({
+      ...editingItem,
+      name: data.name || editingItem.name,
+      category: data.category || editingItem.category,
+      itemCount: String(data.count ?? editingItem.itemCount),
+      amount_per_unit: data.amount_per_unit != null ? String(data.amount_per_unit) : editingItem.amount_per_unit,
+      unit: data.unit || editingItem.unit,
+      barcode: data.barcode,
+    })
+    setEnrichApplied('✅ Barcode info applied — review and save')
+    setEnrichBarcodeResult(null)
+    setEnrichMode(null)
+  }
+
+  async function handleEnrichReceiptFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setEnrichReceiptLoading(true)
+    setEnrichReceiptResult(null)
+    const formData = new FormData()
+    formData.append('receipt', file)
+    try {
+      const res = await fetch('/api/parse-receipt', { method: 'POST', body: formData })
+      const data = await res.json()
+      if (data.error) { setEnrichReceiptLoading(false); return }
+      setEnrichReceiptResult(data)
+    } catch {}
+    setEnrichReceiptLoading(false)
+    e.target.value = ''
+  }
+
+  function applyReceiptLine(line: EnrichReceiptLine, retailer: string) {
+    if (!editingItem) return
+    setEditingItem({
+      ...editingItem,
+      price: line.price != null ? String(line.price) : editingItem.price,
+      price_source: line.price != null ? 'receipt' : editingItem.price_source,
+      retailer: retailer || editingItem.retailer,
+      unit: line.unit !== 'item' ? line.unit : editingItem.unit,
+    })
+    setEnrichApplied('✅ Receipt match applied — review and save')
+    setEnrichReceiptResult(null)
+    setEnrichMode(null)
+  }
+
+  // ── Filtering & sorting ────────────────────────────────────────────────────
 
   const retailers = Array.from(new Set(items.map(i => i.retailer).filter(Boolean))) as string[]
 
@@ -640,6 +841,8 @@ export default function InventoryPage() {
             opened_at: item.opened_at || '',
             retailer: item.retailer || '',
             price: item.price != null ? String(item.price) : '',
+            price_source: item.price_source || '',
+            barcode: item.barcode || '',
             status: item.status,
           })
           setUsingItem(null)
@@ -1199,6 +1402,188 @@ export default function InventoryPage() {
                   <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', color: '#bbb' }}>£</span>
                   <input type="number" min={0} step={0.01} placeholder="0.00" value={editingItem.price} onChange={e => setEditingItem({ ...editingItem, price: e.target.value })} style={{ ...editInputStyle, maxWidth: '140px' }} />
                 </div>
+              </div>
+
+              {/* ── Improve item details ── */}
+              <div style={{ borderTop: '1.5px solid #f0f0f0', paddingTop: '16px' }}>
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#888', margin: '0 0 10px' }}>
+                  Improve item details
+                </p>
+                {/* Enrichment type buttons */}
+                <div style={{ display: 'flex', gap: '8px', marginBottom: enrichMode ? '14px' : '0' }}>
+                  <button
+                    onClick={() => { setEnrichMode(enrichMode === 'barcode' ? null : 'barcode'); setEnrichBarcodeResult(null); setEnrichApplied(null) }}
+                    style={{ ...btnBase, flex: 1, padding: '10px 8px', background: enrichMode === 'barcode' ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#f5f5f5', color: enrichMode === 'barcode' ? 'white' : '#666', fontSize: '13px', boxShadow: enrichMode === 'barcode' ? '0 4px 12px rgba(255,112,67,0.3)' : 'none' }}
+                  >
+                    📷 Scan barcode
+                  </button>
+                  <button
+                    onClick={() => { setEnrichMode(enrichMode === 'receipt' ? null : 'receipt'); setEnrichReceiptResult(null); setEnrichApplied(null) }}
+                    style={{ ...btnBase, flex: 1, padding: '10px 8px', background: enrichMode === 'receipt' ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#f5f5f5', color: enrichMode === 'receipt' ? 'white' : '#666', fontSize: '13px', boxShadow: enrichMode === 'receipt' ? '0 4px 12px rgba(255,112,67,0.3)' : 'none' }}
+                  >
+                    🧾 Match receipt
+                  </button>
+                </div>
+
+                {/* Applied confirmation banner */}
+                {enrichApplied && (
+                  <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '10px', padding: '10px 14px', marginBottom: '10px' }}>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#388e3c', margin: 0 }}>{enrichApplied}</p>
+                  </div>
+                )}
+
+                {/* ── Barcode enrichment panel ── */}
+                {enrichMode === 'barcode' && (
+                  <div style={{ background: '#f9f9f9', borderRadius: '12px', padding: '14px' }}>
+                    {/* Camera viewfinder */}
+                    {enrichCameraActive && (
+                      <div style={{ marginBottom: '10px' }}>
+                        <div style={{ position: 'relative', borderRadius: '10px', overflow: 'hidden', background: '#000', marginBottom: '8px' }}>
+                          <video ref={enrichVideoRef} muted playsInline style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block' }} />
+                          <div style={{ position: 'absolute', inset: '10px', border: '2px solid rgba(255,112,67,0.5)', borderRadius: '8px', pointerEvents: 'none' }} />
+                          {enrichScanFlash && <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.7)', borderRadius: '10px' }} />}
+                        </div>
+                        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 8px', textAlign: 'center' }}>
+                          Point camera at barcode
+                        </p>
+                        <button onClick={stopEnrichCamera} style={{ ...btnBase, width: '100%', background: '#f0f0f0', color: '#888', padding: '8px' }}>
+                          Cancel camera
+                        </button>
+                      </div>
+                    )}
+
+                    {!enrichCameraActive && !enrichBarcodeLoading && !enrichBarcodeResult && (
+                      <>
+                        <button onClick={startEnrichCamera} style={{ ...btnBase, width: '100%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', padding: '10px', marginBottom: '10px', fontSize: '14px', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>
+                          📷 Open camera
+                        </button>
+                        {enrichCameraError && (
+                          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff4444', margin: '0 0 8px' }}>⚠ {enrichCameraError}</p>
+                        )}
+                        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', color: '#bbb', margin: '0 0 6px', textAlign: 'center' }}>or enter barcode manually</p>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <input
+                            type="text" inputMode="numeric" placeholder="Barcode number"
+                            value={enrichBarcodeInput}
+                            onChange={e => setEnrichBarcodeInput(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && lookupEnrichBarcode(enrichBarcodeInput)}
+                            style={{ ...editInputStyle, flex: 1 }}
+                          />
+                          <button
+                            onClick={() => lookupEnrichBarcode(enrichBarcodeInput)}
+                            disabled={!enrichBarcodeInput.trim()}
+                            style={{ ...btnBase, background: enrichBarcodeInput.trim() ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', color: enrichBarcodeInput.trim() ? 'white' : '#bbb', padding: '8px 14px', fontSize: '13px' }}
+                          >
+                            Lookup
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {enrichBarcodeLoading && (
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff9a3c', margin: 0, textAlign: 'center' }}>
+                        Looking up product...
+                      </p>
+                    )}
+
+                    {enrichBarcodeResult && (
+                      <div style={{ background: 'white', borderRadius: '10px', padding: '12px', border: enrichBarcodeResult.found ? '1.5px solid rgba(76,175,80,0.25)' : '1.5px solid #eee' }}>
+                        {enrichBarcodeResult.found ? (
+                          <>
+                            <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 4px' }}>Found: {enrichBarcodeResult.name}</p>
+                            <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 10px' }}>
+                              {enrichBarcodeResult.count > 1 ? `${enrichBarcodeResult.count} × ` : ''}
+                              {enrichBarcodeResult.amount_per_unit != null ? `${enrichBarcodeResult.amount_per_unit} ${enrichBarcodeResult.unit}` : enrichBarcodeResult.unit}
+                              {' · '}{enrichBarcodeResult.category}
+                            </p>
+                            <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: '0 0 10px' }}>
+                              This will update: name, category, amount/unit. Price and retailer unchanged.
+                            </p>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button onClick={() => applyBarcodeEnrichment(enrichBarcodeResult!)} style={{ ...btnBase, flex: 1, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', padding: '9px', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>
+                                Apply to item
+                              </button>
+                              <button onClick={() => { setEnrichBarcodeResult(null); setEnrichBarcodeInput('') }} style={{ ...btnBase, background: '#f0f0f0', color: '#888', padding: '9px 14px' }}>
+                                Try again
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: '0 0 8px' }}>
+                              Product not found in database for barcode {enrichBarcodeResult.barcode}
+                            </p>
+                            <button onClick={() => { setEnrichBarcodeResult(null); setEnrichBarcodeInput('') }} style={{ ...btnBase, background: '#f0f0f0', color: '#888', padding: '8px 16px', fontSize: '13px' }}>
+                              Try a different barcode
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Receipt enrichment panel ── */}
+                {enrichMode === 'receipt' && (
+                  <div style={{ background: '#f9f9f9', borderRadius: '12px', padding: '14px' }}>
+                    {!enrichReceiptResult && !enrichReceiptLoading && (
+                      <>
+                        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 10px', lineHeight: 1.4 }}>
+                          Scan a receipt to match this item and fill in price, retailer, and more.
+                          The image is processed and immediately discarded — not stored.
+                        </p>
+                        <label style={{ ...btnBase, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', padding: '11px', fontSize: '14px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(255,112,67,0.3)', borderRadius: '50px' }}>
+                          <span>📷</span> Choose receipt photo
+                          <input
+                            ref={enrichReceiptRef}
+                            type="file" accept="image/*" capture="environment"
+                            onChange={handleEnrichReceiptFile}
+                            style={{ display: 'none' }}
+                          />
+                        </label>
+                      </>
+                    )}
+
+                    {enrichReceiptLoading && (
+                      <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                        <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff9a3c', margin: '0 0 4px' }}>✨ Reading receipt...</p>
+                        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: 0 }}>AI is parsing the items</p>
+                      </div>
+                    )}
+
+                    {enrichReceiptResult && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                          <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#2d2d2d', margin: 0 }}>
+                            {enrichReceiptResult.retailer_name} — tap the matching line
+                          </p>
+                          <button onClick={() => { setEnrichReceiptResult(null) }} style={{ background: 'none', border: 'none', color: '#bbb', fontSize: '12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, cursor: 'pointer', padding: '2px 6px' }}>
+                            Rescan
+                          </button>
+                        </div>
+                        <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {enrichReceiptResult.items.map((line, i) => (
+                            <button
+                              key={i}
+                              onClick={() => applyReceiptLine(line, enrichReceiptResult!.retailer_name)}
+                              style={{ background: 'white', border: '1.5px solid #eee', borderRadius: '10px', padding: '10px 12px', cursor: 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}
+                            >
+                              <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#2d2d2d', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {line.normalized_name}
+                              </span>
+                              {line.price != null && (
+                                <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#ff7043', flexShrink: 0 }}>£{line.price.toFixed(2)}</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: '8px 0 0' }}>
+                          Applying will update price, retailer, and unit. Receipt image is discarded.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Status */}
