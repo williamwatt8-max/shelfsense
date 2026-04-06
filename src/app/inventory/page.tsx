@@ -730,9 +730,10 @@ export default function InventoryPage() {
 
   const expiringCount = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d >= 0 && d <= 7 }).length
   const expiredCount  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d < 0 }).length
-  const activeItems   = items.filter(i => { const d = daysLeft(i.expiry_date); return d === null || d >= 0 })
-  const stockValue    = activeItems.reduce((sum, i) => sum + (i.price ?? 0), 0)
-  const pricedCount   = activeItems.filter(i => i.price !== null).length
+  // Stock value uses the currently filtered set (respects location/tab), excluding expired items
+  const stockItems  = filter === 'expired' ? [] : filtered
+  const stockValue  = stockItems.reduce((sum, i) => sum + (i.price ?? 0), 0)
+  const pricedCount = stockItems.filter(i => i.price !== null).length
 
   // ── Static config ─────────────────────────────────────────────────────────
 
@@ -744,7 +745,7 @@ export default function InventoryPage() {
   }
   const units   = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
   const btnBase: React.CSSProperties = { border: 'none', borderRadius: '50px', padding: '7px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', cursor: 'pointer' }
-  const categories = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
+  const categories = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'pet', 'other']
   const locationOptions = [
     { value: 'fridge',    label: '❄️ Fridge'    },
     { value: 'freezer',   label: '🧊 Freezer'   },
@@ -1039,7 +1040,7 @@ export default function InventoryPage() {
           <div style={{ background: 'white', borderRadius: '16px', padding: '16px 20px', marginBottom: '16px', boxShadow: '0 4px 16px rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 2px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                💰 Current Stock Value
+                💰 {filter === 'all' ? 'Stock Value' : filter === 'expiring' ? 'Expiring Value' : `${filter.charAt(0).toUpperCase() + filter.slice(1)} Value`}
               </p>
               <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '28px', color: '#2d2d2d', margin: 0, lineHeight: 1 }}>
                 £{stockValue.toFixed(2)}
@@ -1049,9 +1050,9 @@ export default function InventoryPage() {
               <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', margin: 0 }}>
                 {pricedCount} priced item{pricedCount !== 1 ? 's' : ''}
               </p>
-              {items.length - pricedCount > 0 && (
+              {stockItems.length - pricedCount > 0 && (
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#ddd', margin: '2px 0 0' }}>
-                  + {items.length - pricedCount} unpriced
+                  + {stockItems.length - pricedCount} unpriced
                 </p>
               )}
             </div>

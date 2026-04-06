@@ -53,7 +53,7 @@ type ItemForm = {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const UNITS      = ['item', 'g', 'kg', 'ml', 'l', 'bottle', 'tin', 'loaf', 'pack', 'bag', 'head', 'fillet']
-const CATEGORIES = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'other']
+const CATEGORIES = ['dairy', 'meat', 'fish', 'vegetables', 'fruit', 'bakery', 'tinned', 'dry goods', 'oils', 'frozen', 'drinks', 'snacks', 'alcohol', 'household', 'pet', 'other']
 const LOCATIONS: { value: StorageLocation; label: string }[] = [
   { value: 'fridge',    label: '❄️ Fridge'    },
   { value: 'freezer',   label: '🧊 Freezer'   },
@@ -110,6 +110,7 @@ export default function AddPage() {
   const [rVoiceProcessing, setRVoiceProcessing] = useState(false)
   const [rVoiceFilled,     setRVoiceFilled]     = useState<{ name: string; date: string }[]>([])
   const [rVoiceError,      setRVoiceError]      = useState<string | null>(null)
+  const [rVoiceTranscript, setRVoiceTranscript] = useState<string>('')
   const receiptFileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -452,14 +453,17 @@ export default function AddPage() {
     const recognition = new SR()
     recognition.lang = 'en-GB'; recognition.continuous = true; recognition.interimResults = true; recognition.maxAlternatives = 1
     let finalTranscript = ''; let silenceTimer: ReturnType<typeof setTimeout> | null = null
-    const absoluteTimer = setTimeout(() => recognition.stop(), 10000)
-    setRVoiceListening(true); setRVoiceFilled([]); setRVoiceError(null)
+    const absoluteTimer = setTimeout(() => recognition.stop(), 15000)
+    setRVoiceListening(true); setRVoiceFilled([]); setRVoiceError(null); setRVoiceTranscript('')
     recognition.start()
     recognition.onresult = (e: any) => {
       if (silenceTimer) clearTimeout(silenceTimer)
+      let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' '
+        else interim += e.results[i][0].transcript
       }
+      setRVoiceTranscript((finalTranscript + interim).trim())
       silenceTimer = setTimeout(() => recognition.stop(), 3000)
     }
     recognition.onerror = (e: any) => {
@@ -488,20 +492,26 @@ export default function AddPage() {
         const res = await fetch('/api/voice-expiry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transcript, items: numberedItems }) })
         const result = await res.json()
         if (result.error) throw new Error(result.error)
-        const filled: { name: string; date: string }[] = []
-        setReviewBatch(prev => {
-          const updated = [...prev]
-          for (const assignment of (result.assignments || [])) {
-            const ri = receiptIndices.find(r => r.index === assignment.index)
-            if (ri && assignment.expiry_date) {
-              updated[ri.batchIndex] = { ...updated[ri.batchIndex], expiryDate: assignment.expiry_date }
-              filled.push({ name: updated[ri.batchIndex].name, date: assignment.expiry_date })
-            }
+        // Compute updates OUTSIDE the state updater to avoid React batching issues
+        const updates: Array<{ batchIndex: number; expiryDate: string; name: string }> = []
+        for (const assignment of (result.assignments || [])) {
+          const ri = receiptIndices.find(r => r.index === assignment.index)
+          if (ri && assignment.expiry_date) {
+            updates.push({ batchIndex: ri.batchIndex, expiryDate: assignment.expiry_date, name: ri.name })
           }
-          return updated
-        })
-        if (filled.length > 0) setRVoiceFilled(filled)
-        else setRVoiceError("Couldn't match any items — try again.")
+        }
+        if (updates.length > 0) {
+          setReviewBatch(prev => {
+            const updated = [...prev]
+            for (const u of updates) {
+              updated[u.batchIndex] = { ...updated[u.batchIndex], expiryDate: u.expiryDate }
+            }
+            return updated
+          })
+          setRVoiceFilled(updates.map(u => ({ name: u.name, date: u.expiryDate })))
+        } else {
+          setRVoiceError("Couldn't match any items — try again.")
+        }
       } catch { setRVoiceError('Something went wrong. Please try again.') }
       setRVoiceProcessing(false)
     }
@@ -969,12 +979,23 @@ export default function AddPage() {
               <div style={{ marginBottom: '16px', background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}>
                 {/* Numbered items list */}
                 <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>Set expiry dates by voice</p>
-                <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                   {reviewBatch.filter(i => i.source === 'receipt').map((item, idx) => (
-                    <p key={item.id} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#666', margin: 0 }}>
-                      <span style={{ color: '#ff7043', fontWeight: 800 }}>{idx + 1}.</span> {item.name}
-                      {item.expiryDate && <span style={{ color: '#4caf50', marginLeft: '6px' }}>→ {new Date(item.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>}
-                    </p>
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
+                      <span style={{ color: item.expiryDate ? '#4caf50' : '#ddd', fontSize: '15px', width: '18px', flexShrink: 0, textAlign: 'center' }}>
+                        {item.expiryDate ? '✓' : '○'}
+                      </span>
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043' }}>{idx + 1}.</span>
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: item.expiryDate ? '#388e3c' : '#555', flex: 1 }}>
+                        {item.name}
+                      </span>
+                      {item.expiryDate
+                        ? <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#4caf50', flexShrink: 0 }}>
+                            {new Date(item.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                          </span>
+                        : <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#ddd', flexShrink: 0 }}>—</span>
+                      }
+                    </div>
                   ))}
                 </div>
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '0 0 10px' }}>
@@ -985,6 +1006,9 @@ export default function AddPage() {
                   <span style={{ fontSize: '18px', animation: rVoiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
                   {rVoiceListening ? 'Listening...' : rVoiceProcessing ? 'Understanding...' : 'Speak expiry dates'}
                 </button>
+                {rVoiceListening && rVoiceTranscript && (
+                  <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '6px 0 0', fontStyle: 'italic' }}>"{rVoiceTranscript}"</p>
+                )}
                 {rVoiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '8px 0 0' }}>😕 {rVoiceError}</p>}
                 {rVoiceFilled.length > 0 && (
                   <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '10px', padding: '8px 12px', marginTop: '10px' }}>

@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server'
 // Maps Open Food Facts category tags to ShelfSense categories
 function mapCategory(tags: string[] = []): string {
   const t = tags.join(' ').toLowerCase()
+  // Pet food — check before 'fish' to avoid "fish food" → fish category
+  if (t.includes('pet') || t.includes('dog') || t.includes('cat-food') || t.includes('cat food') || t.includes('bird-food') || t.includes('bird food') || t.includes('animal-food') || t.includes('pet-food') || t.includes('kitten') || t.includes('canine') || t.includes('feline')) return 'pet'
   if (t.includes('dair') || t.includes('milk') || t.includes('cheese') || t.includes('yogurt') || t.includes('butter') || t.includes('cream')) return 'dairy'
   if (t.includes('meat') || t.includes('beef') || t.includes('pork') || t.includes('chicken') || t.includes('poultry') || t.includes('lamb')) return 'meat'
   if (t.includes('fish') || t.includes('seafood') || t.includes('salmon') || t.includes('tuna')) return 'fish'
