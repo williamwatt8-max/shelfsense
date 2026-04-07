@@ -10,6 +10,12 @@ export default function Home() {
   const [loading,       setLoading]       = useState(true)
   const [shoppingCount, setShoppingCount] = useState(0)
 
+  // Quick-action modal state
+  const [activeItem,     setActiveItem]     = useState<InventoryItem | null>(null)
+  const [expiryInput,    setExpiryInput]    = useState('')
+  const [actionLoading,  setActionLoading]  = useState(false)
+  const [removeConfirm,  setRemoveConfirm]  = useState(false)
+
   useEffect(() => { loadDashboard() }, [])
 
   async function loadDashboard() {
@@ -18,13 +24,69 @@ export default function Home() {
     if (!userId) { setLoading(false); return }
 
     const [inventoryRes, shoppingRes] = await Promise.all([
-      supabase.from('inventory_items').select('id,name,remaining_quantity,quantity,quantity_original,count,amount_per_unit,unit,expiry_date,opened_at,location,category,created_at').eq('user_id', userId).eq('status', 'active').order('expiry_date', { ascending: true, nullsFirst: false }),
+      supabase.from('inventory_items')
+        .select('id,name,remaining_quantity,quantity,quantity_original,count,amount_per_unit,unit,expiry_date,opened_at,location,category,price,status,created_at,updated_at,user_id,receipt_item_id,source,retailer,purchase_date,opened_expiry_days,price_source,barcode,quantity_original')
+        .eq('user_id', userId).eq('status', 'active')
+        .order('expiry_date', { ascending: true, nullsFirst: false }),
       supabase.from('shopping_list_items').select('id', { count: 'exact', head: true }).eq('user_id', userId).eq('checked', false),
     ])
     setItems((inventoryRes.data || []) as InventoryItem[])
     setShoppingCount(shoppingRes.count ?? 0)
     setLoading(false)
   }
+
+  function openModal(item: InventoryItem) {
+    setActiveItem(item)
+    setExpiryInput(item.expiry_date || '')
+    setRemoveConfirm(false)
+  }
+
+  function closeModal() {
+    setActiveItem(null)
+    setExpiryInput('')
+    setRemoveConfirm(false)
+    setActionLoading(false)
+  }
+
+  async function doMarkUsed() {
+    if (!activeItem) return
+    setActionLoading(true)
+    await supabase.from('inventory_items').update({ status: 'used' }).eq('id', activeItem.id)
+    await supabase.from('inventory_events').insert({ inventory_item_id: activeItem.id, type: 'used' })
+    closeModal()
+    loadDashboard()
+  }
+
+  async function doMarkWasted() {
+    if (!activeItem) return
+    setActionLoading(true)
+    await supabase.from('inventory_items').update({ status: 'discarded' }).eq('id', activeItem.id)
+    await supabase.from('inventory_events').insert({ inventory_item_id: activeItem.id, type: 'discarded' })
+    closeModal()
+    loadDashboard()
+  }
+
+  async function doMarkRemoved() {
+    if (!activeItem) return
+    setActionLoading(true)
+    await supabase.from('inventory_items').update({ status: 'removed' }).eq('id', activeItem.id)
+    await supabase.from('inventory_events').insert({ inventory_item_id: activeItem.id, type: 'removed' })
+    closeModal()
+    loadDashboard()
+  }
+
+  async function doSaveExpiry() {
+    if (!activeItem || !expiryInput) return
+    setActionLoading(true)
+    await supabase.from('inventory_items').update({ expiry_date: expiryInput }).eq('id', activeItem.id)
+    // Update local copy immediately so badge refreshes
+    setItems(prev => prev.map(i => i.id === activeItem.id ? { ...i, expiry_date: expiryInput } : i))
+    setActiveItem(prev => prev ? { ...prev, expiry_date: expiryInput } : null)
+    setActionLoading(false)
+    loadDashboard()
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
 
   function daysLeft(date: string | null): number | null {
     if (!date) return null
@@ -41,11 +103,11 @@ export default function Home() {
   }
 
   function expiryLabel(d: number | null): string {
-    if (d === null) return ''
-    if (d < 0) return `Expired ${Math.abs(d)}d ago`
+    if (d === null) return 'No expiry set'
+    if (d < 0) return `Expired ${Math.abs(d)} day${Math.abs(d) !== 1 ? 's' : ''} ago`
     if (d === 0) return 'Expires today'
-    if (d === 1) return 'Tomorrow'
-    return `${d}d left`
+    if (d === 1) return 'Expires tomorrow'
+    return `Expires in ${d} days`
   }
 
   function fmtQty(item: InventoryItem): string {
@@ -63,11 +125,11 @@ export default function Home() {
     return `${fmt(rem)} ${item.unit}`
   }
 
-  const expiredItems  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d < 0 })
-  const expiringSoon  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d >= 0 && d <= 7 })
+  const expiredItems       = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d < 0 })
+  const expiringSoon       = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d >= 0 && d <= 7 })
   const expirySectionItems = [...expiredItems, ...expiringSoon]
-  const openedItems   = items.filter(i => i.opened_at && !expirySectionItems.some(e => e.id === i.id)).slice(0, 4)
-  const totalItems    = items.length
+  const openedItems        = items.filter(i => i.opened_at && !expirySectionItems.some(e => e.id === i.id)).slice(0, 4)
+  const totalItems         = items.length
 
   const quickActions = [
     { href: '/add',           emoji: '➕', label: 'Add Item',    desc: 'Manual, voice or barcode' },
@@ -76,6 +138,15 @@ export default function Home() {
     { href: '/recipes',       emoji: '🍽️', label: 'Recipes',      desc: 'Meal ideas' },
     { href: '/shopping-list', emoji: '🛒', label: 'Shopping',     desc: `${shoppingCount} item${shoppingCount !== 1 ? 's' : ''} to buy` },
   ]
+
+  const btnBase: React.CSSProperties = {
+    border: 'none', borderRadius: '50px', padding: '10px 18px',
+    fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const modalItem = activeItem
 
   return (
     <main style={{ fontFamily: "'Nunito', sans-serif", minHeight: '100vh', padding: '72px 20px 100px' }}>
@@ -88,18 +159,16 @@ export default function Home() {
           <h1 style={{ fontFamily: "'Fredoka One', cursive", fontSize: '36px', color: '#2d2d2d', margin: '0 0 2px', display: 'flex', alignItems: 'center', gap: '10px' }}>
             🛒 ShelfSense
           </h1>
-          <p style={{ color: '#aaa', fontWeight: 700, fontSize: '14px', margin: 0 }}>
-            Never waste again
-          </p>
+          <p style={{ color: '#aaa', fontWeight: 700, fontSize: '14px', margin: 0 }}>Never waste again</p>
         </div>
 
         {/* Stats row */}
         {!loading && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '20px' }}>
             {[
-              { label: 'In pantry', value: totalItems, color: '#ff7043' },
-              { label: 'Expiring soon', value: expiringSoon.length + expiredItems.length, color: expiredItems.length > 0 ? '#ff4444' : expiringSoon.length > 0 ? '#ff9800' : '#4caf50' },
-              { label: 'To buy', value: shoppingCount, color: '#1e88e5' },
+              { label: 'In pantry',     value: totalItems,                                            color: '#ff7043' },
+              { label: 'Need attention', value: expiredItems.length + expiringSoon.length,             color: expiredItems.length > 0 ? '#ff4444' : expiringSoon.length > 0 ? '#ff9800' : '#4caf50' },
+              { label: 'To buy',        value: shoppingCount,                                          color: '#1e88e5' },
             ].map(({ label, value, color }) => (
               <div key={label} style={{ background: 'white', borderRadius: '14px', padding: '14px 12px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', textAlign: 'center' }}>
                 <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '28px', color, lineHeight: 1 }}>{value}</div>
@@ -114,7 +183,7 @@ export default function Home() {
           <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: '0 0 12px' }}>Quick Actions</p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
             {quickActions.map(({ href, emoji, label, desc, query }) => (
-              <a key={label} href={`${href}${query ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px', borderRadius: '12px', background: '#fdf9f6', textDecoration: 'none', border: '1.5px solid rgba(255,112,67,0.1)', transition: 'all 0.15s' }}>
+              <a key={label} href={`${href}${query ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px', borderRadius: '12px', background: '#fdf9f6', textDecoration: 'none', border: '1.5px solid rgba(255,112,67,0.1)' }}>
                 <span style={{ fontSize: '22px', flexShrink: 0 }}>{emoji}</span>
                 <div>
                   <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', lineHeight: 1.2 }}>{label}</div>
@@ -125,44 +194,67 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Expiring / Expired */}
+        {/* Expiring / Expired section */}
         {!loading && (expiredItems.length > 0 || expiringSoon.length > 0) && (
           <div style={{ background: 'white', borderRadius: '16px', padding: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-              <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: expiredItems.length > 0 ? '#ff4444' : '#ff7043', margin: 0 }}>
-                {expiredItems.length > 0 ? '⚠️ Needs Attention' : '⏰ Expiring Soon'}
-              </p>
-              <a href="/inventory" style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff7043', textDecoration: 'none' }}>Act now →</a>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
-              {expiredItems.slice(0, 3).map(item => {
-                const d = daysLeft(item.expiry_date)
-                return (
-                  <a key={item.id} href="/inventory" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f5f5f5', textDecoration: 'none' }}>
-                    <div>
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', marginLeft: '8px' }}>{fmtQty(item)}</span>
-                    </div>
-                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '3px 10px', borderRadius: '50px', flexShrink: 0 }}>
-                      {expiryLabel(d)}
-                    </span>
-                  </a>
-                )
-              })}
-              {expiringSoon.slice(0, expiredItems.length > 0 ? 3 : 6).map(item => {
-                const d = daysLeft(item.expiry_date)
-                return (
-                  <a key={item.id} href="/inventory" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f5f5f5', textDecoration: 'none' }}>
-                    <div>
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', marginLeft: '8px' }}>{fmtQty(item)}</span>
-                    </div>
-                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '3px 10px', borderRadius: '50px', flexShrink: 0 }}>
-                      {expiryLabel(d)}
-                    </span>
-                  </a>
-                )
-              })}
+
+            {/* Expired sub-section */}
+            {expiredItems.length > 0 && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#ff4444' }}>
+                    ⚠️ Expired — {expiredItems.length} item{expiredItems.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {expiredItems.slice(0, 4).map(item => {
+                  const d = daysLeft(item.expiry_date)
+                  return (
+                    <button key={item.id} onClick={() => openModal(item)}
+                      style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', borderBottom: '1px solid #f5f5f5', background: 'rgba(255,68,68,0.03)', borderRadius: '8px', border: 'none', cursor: 'pointer', textAlign: 'left', marginBottom: '2px' }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', marginLeft: '8px' }}>{fmtQty(item)}</span>
+                      </div>
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '3px 10px', borderRadius: '50px', flexShrink: 0, marginLeft: '8px' }}>
+                        {expiryLabel(d)}
+                      </span>
+                    </button>
+                  )
+                })}
+                {expiringSoon.length > 0 && (
+                  <div style={{ height: '1px', background: '#f0f0f0', margin: '12px 0 10px' }} />
+                )}
+              </>
+            )}
+
+            {/* Expiring soon sub-section */}
+            {expiringSoon.length > 0 && (
+              <>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#ff7043' }}>
+                    ⏰ Expiring soon — {expiringSoon.length} item{expiringSoon.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                {expiringSoon.slice(0, expiredItems.length > 0 ? 3 : 6).map(item => {
+                  const d = daysLeft(item.expiry_date)
+                  return (
+                    <button key={item.id} onClick={() => openModal(item)}
+                      style={{ display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', borderBottom: '1px solid #f5f5f5', background: 'none', borderRadius: '8px', border: 'none', cursor: 'pointer', textAlign: 'left', marginBottom: '2px' }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', marginLeft: '8px' }}>{fmtQty(item)}</span>
+                      </div>
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '3px 10px', borderRadius: '50px', flexShrink: 0, marginLeft: '8px' }}>
+                        {expiryLabel(d)}
+                      </span>
+                    </button>
+                  )
+                })}
+              </>
+            )}
+
+            <div style={{ textAlign: 'right', marginTop: '10px' }}>
+              <a href="/inventory" style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', textDecoration: 'none' }}>See all in inventory →</a>
             </div>
           </div>
         )}
@@ -171,14 +263,15 @@ export default function Home() {
         {!loading && openedItems.length > 0 && (
           <div style={{ background: 'white', borderRadius: '16px', padding: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
             <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#20b2aa', margin: '0 0 12px' }}>🔓 Currently Open</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               {openedItems.map(item => {
                 const daysOpen = differenceInDays(new Date(), new Date(item.opened_at!))
                 return (
-                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #f5f5f5' }}>
+                  <button key={item.id} onClick={() => openModal(item)}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 10px', background: 'none', border: 'none', borderRadius: '8px', cursor: 'pointer', borderBottom: '1px solid #f5f5f5', textAlign: 'left', width: '100%' }}>
                     <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
-                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#aaa' }}>opened {daysOpen === 0 ? 'today' : `${daysOpen}d ago`}</span>
-                  </div>
+                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#aaa', flexShrink: 0 }}>opened {daysOpen === 0 ? 'today' : `${daysOpen}d ago`}</span>
+                  </button>
                 )
               })}
             </div>
@@ -204,6 +297,98 @@ export default function Home() {
         )}
 
       </div>
+
+      {/* ── Quick-action bottom sheet ── */}
+      {modalItem && (
+        <>
+          {/* Backdrop */}
+          <div onClick={closeModal}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 2000 }} />
+
+          {/* Sheet */}
+          <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: 'white', borderRadius: '24px 24px 0 0', padding: '20px 20px 44px', zIndex: 2001, boxShadow: '0 -8px 40px rgba(0,0,0,0.18)', fontFamily: "'Nunito',sans-serif" }}>
+            {/* Drag handle */}
+            <div style={{ width: '40px', height: '4px', background: '#eee', borderRadius: '2px', margin: '0 auto 16px' }} />
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '20px', color: '#2d2d2d', margin: '0 0 4px', textTransform: 'capitalize' }}>{modalItem.name}</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '13px', color: '#888' }}>{fmtQty(modalItem)}</span>
+                  {modalItem.expiry_date && (() => {
+                    const d = daysLeft(modalItem.expiry_date)
+                    return (
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '2px 8px', borderRadius: '50px' }}>
+                        {expiryLabel(d)}
+                      </span>
+                    )
+                  })()}
+                  {modalItem.location && (
+                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb' }}>
+                      {modalItem.location === 'fridge' ? '❄️ Fridge' : modalItem.location === 'freezer' ? '🧊 Freezer' : modalItem.location === 'cupboard' ? '🗄️ Cupboard' : modalItem.location === 'household' ? '🏠 Household' : '📦 Other'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button onClick={closeModal} style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '22px', cursor: 'pointer', padding: '2px 4px', lineHeight: 1, flexShrink: 0 }}>✕</button>
+            </div>
+
+            {removeConfirm ? (
+              /* Remove confirmation */
+              <div style={{ background: '#fff0f0', border: '1.5px solid rgba(255,68,68,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '12px' }}>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#cc3333', margin: '0 0 10px' }}>
+                  Remove this item permanently? It won't count as waste.
+                </p>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={doMarkRemoved} disabled={actionLoading}
+                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', flex: 1, opacity: actionLoading ? 0.6 : 1 }}>
+                    Yes, remove it
+                  </button>
+                  <button onClick={() => setRemoveConfirm(false)}
+                    style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Primary actions */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                  <button onClick={doMarkUsed} disabled={actionLoading}
+                    style={{ ...btnBase, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', boxShadow: '0 4px 14px rgba(76,175,80,0.3)', opacity: actionLoading ? 0.6 : 1 }}>
+                    ✅ Used it
+                  </button>
+                  <button onClick={doMarkWasted} disabled={actionLoading}
+                    style={{ ...btnBase, background: '#fff0f0', color: '#e05050', opacity: actionLoading ? 0.6 : 1 }}>
+                    🗑️ Wasted
+                  </button>
+                </div>
+
+                {/* Set expiry */}
+                <div style={{ background: '#fdf9f6', borderRadius: '12px', padding: '12px 14px', marginBottom: '12px', border: '1.5px solid rgba(255,112,67,0.12)' }}>
+                  <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 8px' }}>
+                    📅 Update expiry date
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <input type="date" value={expiryInput}
+                      onChange={e => setExpiryInput(e.target.value)}
+                      style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '8px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: expiryInput ? '#2d2d2d' : '#bbb' }} />
+                    <button onClick={doSaveExpiry} disabled={actionLoading || !expiryInput}
+                      style={{ ...btnBase, background: expiryInput ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', color: expiryInput ? 'white' : '#bbb', padding: '10px 16px', boxShadow: expiryInput ? '0 4px 12px rgba(255,112,67,0.3)' : 'none', opacity: actionLoading ? 0.6 : 1 }}>
+                      Save
+                    </button>
+                  </div>
+                </div>
+
+                {/* Remove item (tertiary) */}
+                <button onClick={() => setRemoveConfirm(true)}
+                  style={{ ...btnBase, background: 'none', color: '#bbb', padding: '6px 0', fontSize: '13px', width: '100%', textAlign: 'center' }}>
+                  ✕ Remove item (not waste)
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
     </main>
   )
 }

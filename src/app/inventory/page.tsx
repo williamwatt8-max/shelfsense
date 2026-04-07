@@ -158,9 +158,10 @@ export default function InventoryPage() {
 
   function expiryLabel(d: number | null): string {
     if (d === null) return 'No expiry'
-    if (d < 0) return `Expired ${Math.abs(d)}d ago`
+    if (d < 0) return `Expired ${Math.abs(d)} day${Math.abs(d) !== 1 ? 's' : ''} ago`
     if (d === 0) return 'Expires today'
-    if (d === 1) return 'Tomorrow'
+    if (d === 1) return 'Expires tomorrow'
+    if (d <= 7) return `Expires in ${d} days`
     return `${d}d left`
   }
 
@@ -1741,8 +1742,7 @@ export default function InventoryPage() {
                 <select value={editingItem.status} onChange={e => setEditingItem({ ...editingItem, status: e.target.value })} style={{ ...editSelectStyle, maxWidth: '200px' }}>
                   <option value="active">Active</option>
                   <option value="used">Used</option>
-                  <option value="discarded">Discarded</option>
-                  <option value="expired">Expired</option>
+                  <option value="discarded">Wasted</option>
                   <option value="removed">Removed</option>
                 </select>
               </div>
