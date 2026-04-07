@@ -786,7 +786,7 @@ export default function InventoryPage() {
       {usingItem!.isFirstOpen && (
         <div style={{ background: 'rgba(255,112,67,0.05)', border: '1px solid rgba(255,112,67,0.15)', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' }}>
           <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff7043', margin: '0 0 6px' }}>
-            Opening for the first time — opened_at set to today
+            We'll note today as the opening date.
           </p>
           {usingItem!.suggestedExpiry && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -806,14 +806,14 @@ export default function InventoryPage() {
       )}
 
       <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', margin: '0 0 8px' }}>
-        How much did you <strong>use</strong>?{usingItem!.isFirstOpen && <span style={{ color: '#aaa', fontWeight: 600 }}> (0 = just opening)</span>}
+        How much did you use?{usingItem!.isFirstOpen && <span style={{ color: '#aaa', fontWeight: 600 }}> Leave at 0 to just open it.</span>}
       </p>
 
       <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
         {usingItem!.isFirstOpen && (
           <button onClick={() => setUsingItem({ ...usingItem!, used: 0 })}
             style={{ ...btnBase, flex: 1, background: usingItem!.used === 0 ? '#e8f5e9' : '#f5f5f5', color: usingItem!.used === 0 ? '#388e3c' : '#bbb', border: `1.5px solid ${usingItem!.used === 0 ? 'rgba(76,175,80,0.3)' : 'transparent'}`, padding: '6px 2px', fontSize: '11px' }}>
-            0 (open only)
+            Just opening
           </button>
         )}
         {[25, 50, 75].map(pct => (
@@ -845,7 +845,9 @@ export default function InventoryPage() {
       </div>
 
       <div style={{ display: 'flex', gap: '8px' }}>
-        <button onClick={markUsedSome} style={{ ...btnBase, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', boxShadow: '0 4px 12px rgba(76,175,80,0.3)' }}>✅ Confirm</button>
+        <button onClick={markUsedSome} style={{ ...btnBase, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', boxShadow: '0 4px 12px rgba(76,175,80,0.3)' }}>
+          {usingItem!.isFirstOpen && usingItem!.used === 0 ? '✅ Mark as opened' : '✅ Record use'}
+        </button>
         <button onClick={() => setUsingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
       </div>
     </div>

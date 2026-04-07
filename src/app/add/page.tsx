@@ -88,9 +88,10 @@ export default function AddPage() {
   const [step,        setStep]        = useState<Step>('choose')
   const [mode,        setMode]        = useState<Mode>('manual')
   const [reviewBatch, setReviewBatch] = useState<ReviewBatchItem[]>([])
-  const [saving,      setSaving]      = useState(false)
-  const [savedCount,  setSavedCount]  = useState(0)
-  const [addedName,   setAddedName]   = useState<string | null>(null)
+  const [saving,        setSaving]        = useState(false)
+  const [savedCount,    setSavedCount]    = useState(0)
+  const [addedName,     setAddedName]     = useState<string | null>(null)
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set())
 
   // ── Manual / voice form state ─────────────────────────────────────────────
   const [form,            setForm]            = useState<ItemForm>(blankForm())
@@ -185,6 +186,7 @@ export default function AddPage() {
     setVoiceTranscript('')
     setAddedName(null)
     setMatchSuggestions([])
+    setExpandedItems(new Set())
   }
 
   // ── Form helpers ──────────────────────────────────────────────────────────
@@ -404,6 +406,28 @@ export default function AddPage() {
       }
     }
     return { updatedBatch, suggestions }
+  }
+
+  // Whether a review item should start expanded (full form) vs collapsed (compact view)
+  function needsReview(item: ReviewBatchItem): boolean {
+    if (item.source !== 'receipt') return true // manual / voice / barcode always show full form
+    if (!item.name.trim()) return true
+    if (item.confidence != null && item.confidence < 0.75) return true
+    if (item.lookupStatus === 'not_found' || item.lookupStatus === 'error') return true
+    return false
+  }
+
+  function isItemExpanded(item: ReviewBatchItem): boolean {
+    if (expandedItems.has(item.id)) return true
+    return needsReview(item)
+  }
+
+  function toggleItemExpanded(id: string) {
+    setExpandedItems(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
   }
 
   function acceptSuggestion(suggId: string) {
@@ -954,57 +978,65 @@ export default function AddPage() {
         {step === 'choose' && (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
-              {([
-                {
-                  mode: 'receipt',
-                  emoji: '🧾',
-                  title: 'Add a Receipt',
-                  desc: 'Scan a photo, upload a PDF, or paste order text',
-                  accent: true,
-                },
-                {
-                  mode: 'barcode',
-                  emoji: '📦',
-                  title: 'Scan Items',
-                  desc: 'Point the camera at each barcode to build a list',
-                  accent: false,
-                },
-                {
-                  mode: 'manual',
-                  emoji: '✍️',
-                  title: 'Add Manually',
-                  desc: 'Type item details or describe them by voice',
-                  accent: false,
-                },
-              ] as { mode: Mode; emoji: string; title: string; desc: string; accent: boolean }[]).map(opt => (
-                <button
-                  key={opt.mode}
-                  onClick={() => goToCapture(opt.mode)}
-                  style={{
-                    background: 'white',
-                    borderRadius: '20px',
-                    padding: '20px 22px',
-                    boxShadow: '0 2px 12px rgba(0,0,0,0.07)',
-                    border: opt.accent ? '2px solid rgba(255,112,67,0.25)' : '2px solid transparent',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '16px',
-                  }}
-                >
-                  <div style={{ fontSize: '40px', lineHeight: 1, flexShrink: 0 }}>{opt.emoji}</div>
-                  <div>
-                    <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '20px', color: opt.accent ? '#ff7043' : '#2d2d2d', marginBottom: '3px' }}>
+              {/* Hero: Add a Receipt */}
+              <button
+                onClick={() => goToCapture('receipt')}
+                style={{
+                  background: 'linear-gradient(135deg, #fff8f5 0%, #fde8d0 100%)',
+                  borderRadius: '20px',
+                  padding: '22px 22px',
+                  boxShadow: '0 4px 20px rgba(255,112,67,0.15)',
+                  border: '2px solid rgba(255,112,67,0.25)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '16px',
+                  width: '100%',
+                }}
+              >
+                <div style={{ fontSize: '44px', lineHeight: 1, flexShrink: 0 }}>🧾</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '22px', color: '#ff7043', marginBottom: '2px' }}>
+                    Add a Receipt
+                  </div>
+                  <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '13px', color: '#c0896e', lineHeight: 1.4 }}>
+                    Photo, PDF, or paste order text — AI extracts everything
+                  </div>
+                </div>
+                <div style={{ color: 'rgba(255,112,67,0.4)', fontSize: '22px', flexShrink: 0 }}>›</div>
+              </button>
+
+              {/* Secondary options in a row */}
+              <div style={{ display: 'flex', gap: '10px' }}>
+                {([
+                  { mode: 'barcode' as Mode, emoji: '📦', title: 'Scan Items', desc: 'Camera barcode scan' },
+                  { mode: 'manual' as Mode,  emoji: '✍️', title: 'Add Manually', desc: 'Type or use voice' },
+                ]).map(opt => (
+                  <button
+                    key={opt.mode}
+                    onClick={() => goToCapture(opt.mode)}
+                    style={{
+                      flex: 1,
+                      background: 'white',
+                      borderRadius: '18px',
+                      padding: '18px 14px',
+                      boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
+                      border: '2px solid transparent',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ fontSize: '32px', lineHeight: 1, marginBottom: '8px' }}>{opt.emoji}</div>
+                    <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', marginBottom: '2px' }}>
                       {opt.title}
                     </div>
-                    <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '13px', color: '#bbb', lineHeight: 1.4 }}>
+                    <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#ccc', lineHeight: 1.3 }}>
                       {opt.desc}
                     </div>
-                  </div>
-                  <div style={{ marginLeft: 'auto', color: '#ddd', fontSize: '20px', flexShrink: 0 }}>›</div>
-                </button>
-              ))}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Pending review batch banner */}
@@ -1308,7 +1340,14 @@ export default function AddPage() {
                   </p>
                 )}
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: 0 }}>
-                  Edit details, then save
+                  {(() => {
+                    const visible = reviewBatch.filter(i => !i.absorbed)
+                    const total = visible.length
+                    const needCheck = visible.filter(i => needsReview(i)).length
+                    if (total === 0) return 'No items yet'
+                    if (needCheck === 0) return `${total} item${total !== 1 ? 's' : ''} · all looking good ✓`
+                    return `${total} item${total !== 1 ? 's' : ''} · ${total - needCheck} ready · ${needCheck} to check`
+                  })()}
                 </p>
               </div>
               <button onClick={goToChoose} style={{ ...btnBase, background: '#f5f5f5', color: '#888', padding: '8px 14px', fontSize: '13px' }}>
@@ -1365,7 +1404,7 @@ export default function AddPage() {
             {matchSuggestions.some(s => s.status === 'pending') && (
               <div style={{ marginBottom: '16px', background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', border: '1.5px solid rgba(255,112,67,0.2)' }}>
                 <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#ff7043', margin: '0 0 4px' }}>🔗 Suggested matches</p>
-                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 12px' }}>These receipt items may match your scanned products</p>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 12px' }}>Link these to add price info and improve tracking — or skip if they're different items</p>
                 {matchSuggestions.filter(s => s.status === 'pending').map(sugg => {
                   const rItem = reviewBatch.find(i => i.id === sugg.receiptItemId)
                   const bItem = reviewBatch.find(i => i.id === sugg.barcodeItemId)
@@ -1406,69 +1445,89 @@ export default function AddPage() {
             {/* Review item cards */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
               {reviewBatch.map((item, index) => item.absorbed ? null : (
-                <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: (item.confidence != null && item.confidence < 0.8) || item.lookupStatus === 'not_found' || item.lookupStatus === 'error' ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent' }}>
+                <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: needsReview(item) ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent' }}>
 
-                  {/* Row 1: source icon / checkbox + name + remove */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                    {item.source === 'receipt' ? (
+                  {isItemExpanded(item) ? (
+                    <>
+                      {/* Row 1: source icon / checkbox + name + collapse + remove */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                        {item.source === 'receipt' ? (
+                          <input type="checkbox" checked={item.selected} onChange={e => updateReviewItem(index, { selected: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ff7043', flexShrink: 0, cursor: 'pointer' }} />
+                        ) : (
+                          <span style={{ fontSize: '15px', flexShrink: 0 }}>
+                            {item.source === 'barcode'
+                              ? (item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'known' ? '⭐' : item.lookupStatus === 'found' ? '✅' : '⚠️')
+                              : item.source === 'voice' ? '🎤' : '📝'}
+                          </span>
+                        )}
+                        <input type="text" value={item.name}
+                          onChange={e => updateReviewItem(index, { name: e.target.value })}
+                          style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', minWidth: 0 }} />
+                        {item.isKnown && (
+                          <span style={{ background: 'rgba(255,193,7,0.15)', color: '#e6a817', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⭐ known</span>
+                        )}
+                        {item.confidence != null && item.confidence < 0.8 && (
+                          <span style={{ background: 'rgba(255,179,71,0.15)', color: '#e08000', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⚠ check</span>
+                        )}
+                        {/* Collapse button — only for receipt items that don't need review */}
+                        {item.source === 'receipt' && !needsReview(item) && (
+                          <button onClick={() => toggleItemExpanded(item.id)} style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '14px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }} title="Collapse">▲</button>
+                        )}
+                        <button onClick={() => removeReviewItem(index)} style={{ background: 'none', border: 'none', color: '#ddd', fontSize: '16px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }}>✕</button>
+                      </div>
+
+                      {/* Row 2: count × amount + unit + price */}
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <input type="number" min={1} step={1} value={item.count}
+                            onChange={e => updateReviewItem(index, { count: e.target.value })}
+                            style={{ ...smallField, width: '52px', textAlign: 'center' }} title="Count" />
+                          <span style={{ color: '#ccc', fontWeight: 700, fontSize: '14px' }}>×</span>
+                          <input type="number" min={0} step={0.1} value={item.amountPerUnit} placeholder="amt"
+                            onChange={e => updateReviewItem(index, { amountPerUnit: e.target.value })}
+                            style={{ ...smallField, width: '60px', textAlign: 'center', color: item.amountPerUnit ? '#2d2d2d' : '#bbb' }} title="Amount per unit" />
+                        </div>
+                        <select value={item.unit} onChange={e => updateReviewItem(index, { unit: e.target.value })} style={smallField}>
+                          {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: 'auto' }}>
+                          <span style={{ color: '#bbb', fontWeight: 700, fontSize: '13px', fontFamily: "'Nunito',sans-serif" }}>£</span>
+                          <input type="number" min={0} step={0.01} value={item.price ?? ''} placeholder="—"
+                            onChange={e => updateReviewItem(index, { price: e.target.value !== '' ? Number(e.target.value) : null })}
+                            style={{ ...smallField, width: '68px', textAlign: 'right', color: '#ff7043' }} />
+                        </div>
+                      </div>
+
+                      {/* Row 3: location + category */}
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: item.location !== 'household' ? '8px' : '0' }}>
+                        <select value={item.location} onChange={e => updateReviewItem(index, { location: e.target.value as StorageLocation })} style={{ ...smallField, flex: 1 }}>
+                          {LOCATIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                        </select>
+                        <select value={item.category} onChange={e => updateReviewItem(index, { category: e.target.value })} style={{ ...smallField, flex: 1 }}>
+                          <option value="">— category —</option>
+                          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Row 4: expiry */}
+                      {item.location !== 'household' && (
+                        <input type="date" value={item.expiryDate}
+                          onChange={e => updateReviewItem(index, { expiryDate: e.target.value })}
+                          style={{ ...smallField, color: item.expiryDate ? '#2d2d2d' : '#bbb' }} />
+                      )}
+                    </>
+                  ) : (
+                    /* Collapsed view — high-confidence receipt items */
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <input type="checkbox" checked={item.selected} onChange={e => updateReviewItem(index, { selected: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ff7043', flexShrink: 0, cursor: 'pointer' }} />
-                    ) : (
-                      <span style={{ fontSize: '15px', flexShrink: 0 }}>
-                        {item.source === 'barcode'
-                          ? (item.lookupStatus === 'loading' ? '⏳' : item.lookupStatus === 'known' ? '⭐' : item.lookupStatus === 'found' ? '✅' : '⚠️')
-                          : item.source === 'voice' ? '🎤' : '📝'}
-                      </span>
-                    )}
-                    <input type="text" value={item.name}
-                      onChange={e => updateReviewItem(index, { name: e.target.value })}
-                      style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', minWidth: 0 }} />
-                    {item.isKnown && (
-                      <span style={{ background: 'rgba(255,193,7,0.15)', color: '#e6a817', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⭐ known</span>
-                    )}
-                    {item.confidence != null && item.confidence < 0.8 && (
-                      <span style={{ background: 'rgba(255,179,71,0.15)', color: '#e08000', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⚠ low</span>
-                    )}
-                    <button onClick={() => removeReviewItem(index)} style={{ background: 'none', border: 'none', color: '#ddd', fontSize: '16px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }}>✕</button>
-                  </div>
-
-                  {/* Row 2: count × amount + unit + price */}
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <input type="number" min={1} step={1} value={item.count}
-                        onChange={e => updateReviewItem(index, { count: e.target.value })}
-                        style={{ ...smallField, width: '52px', textAlign: 'center' }} title="Count" />
-                      <span style={{ color: '#ccc', fontWeight: 700, fontSize: '14px' }}>×</span>
-                      <input type="number" min={0} step={0.1} value={item.amountPerUnit} placeholder="amt"
-                        onChange={e => updateReviewItem(index, { amountPerUnit: e.target.value })}
-                        style={{ ...smallField, width: '60px', textAlign: 'center', color: item.amountPerUnit ? '#2d2d2d' : '#bbb' }} title="Amount per unit" />
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+                      {item.price != null && (
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043', flexShrink: 0 }}>£{item.price.toFixed(2)}</span>
+                      )}
+                      <span style={{ color: '#4caf50', fontSize: '14px', flexShrink: 0 }}>✓</span>
+                      <button onClick={() => toggleItemExpanded(item.id)} style={{ background: 'none', border: 'none', color: '#bbb', fontSize: '14px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }} title="Edit">✏️</button>
+                      <button onClick={() => removeReviewItem(index)} style={{ background: 'none', border: 'none', color: '#ddd', fontSize: '16px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }}>✕</button>
                     </div>
-                    <select value={item.unit} onChange={e => updateReviewItem(index, { unit: e.target.value })} style={smallField}>
-                      {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                    </select>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: 'auto' }}>
-                      <span style={{ color: '#bbb', fontWeight: 700, fontSize: '13px', fontFamily: "'Nunito',sans-serif" }}>£</span>
-                      <input type="number" min={0} step={0.01} value={item.price ?? ''} placeholder="—"
-                        onChange={e => updateReviewItem(index, { price: e.target.value !== '' ? Number(e.target.value) : null })}
-                        style={{ ...smallField, width: '68px', textAlign: 'right', color: '#ff7043' }} />
-                    </div>
-                  </div>
-
-                  {/* Row 3: location + category */}
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: item.location !== 'household' ? '8px' : '0' }}>
-                    <select value={item.location} onChange={e => updateReviewItem(index, { location: e.target.value as StorageLocation })} style={{ ...smallField, flex: 1 }}>
-                      {LOCATIONS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
-                    </select>
-                    <select value={item.category} onChange={e => updateReviewItem(index, { category: e.target.value })} style={{ ...smallField, flex: 1 }}>
-                      <option value="">— category —</option>
-                      {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-
-                  {/* Row 4: expiry */}
-                  {item.location !== 'household' && (
-                    <input type="date" value={item.expiryDate}
-                      onChange={e => updateReviewItem(index, { expiryDate: e.target.value })}
-                      style={{ ...smallField, color: item.expiryDate ? '#2d2d2d' : '#bbb' }} />
                   )}
                 </div>
               ))}
