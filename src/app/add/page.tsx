@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { suggestLocation } from '@/lib/categoriser'
-import { StorageLocation } from '@/lib/types'
+import { StorageLocation, ReceiptSourceType } from '@/lib/types'
 import { compressImage } from '@/lib/compressImage'
 
 // ── Step / mode types ─────────────────────────────────────────────────────────
@@ -115,15 +115,19 @@ export default function AddPage() {
   const recognitionRef    = useRef<any>(null)
 
   // ── Receipt state ─────────────────────────────────────────────────────────
-  const [receiptLoading,   setReceiptLoading]   = useState(false)
-  const [receiptRetailer,  setReceiptRetailer]  = useState('')
-  const [receiptTotal,     setReceiptTotal]     = useState<number | null>(null)
-  const [receiptPreview,   setReceiptPreview]   = useState<string | null>(null)
-  const [rVoiceListening,  setRVoiceListening]  = useState(false)
-  const [rVoiceProcessing, setRVoiceProcessing] = useState(false)
-  const [rVoiceFilled,     setRVoiceFilled]     = useState<{ name: string; date: string }[]>([])
-  const [rVoiceError,      setRVoiceError]      = useState<string | null>(null)
-  const [rVoiceTranscript, setRVoiceTranscript] = useState<string>('')
+  const [receiptLoading,    setReceiptLoading]    = useState(false)
+  const [receiptRetailer,   setReceiptRetailer]   = useState('')
+  const [receiptTotal,      setReceiptTotal]      = useState<number | null>(null)
+  const [receiptPreview,    setReceiptPreview]    = useState<string | null>(null)
+  const [receiptSourceType, setReceiptSourceType] = useState<ReceiptSourceType>('photo')
+  const [receiptRawText,    setReceiptRawText]    = useState<string | null>(null)
+  const [pasteText,         setPasteText]         = useState('')
+  const [pasteVisible,      setPasteVisible]      = useState(false)
+  const [rVoiceListening,   setRVoiceListening]   = useState(false)
+  const [rVoiceProcessing,  setRVoiceProcessing]  = useState(false)
+  const [rVoiceFilled,      setRVoiceFilled]      = useState<{ name: string; date: string }[]>([])
+  const [rVoiceError,       setRVoiceError]       = useState<string | null>(null)
+  const [rVoiceTranscript,  setRVoiceTranscript]  = useState<string>('')
   const receiptFileRef = useRef<HTMLInputElement>(null)
   const [matchSuggestions, setMatchSuggestions] = useState<MatchSuggestion[]>([])
 
@@ -171,6 +175,10 @@ export default function AddPage() {
     setReceiptRetailer('')
     setReceiptTotal(null)
     setReceiptPreview(null)
+    setReceiptSourceType('photo')
+    setReceiptRawText(null)
+    setPasteText('')
+    setPasteVisible(false)
     setForm(blankForm())
     setVoiceError(null)
     setVoiceFilled(false)
@@ -523,45 +531,76 @@ export default function AddPage() {
 
   // ── Receipt ───────────────────────────────────────────────────────────────
 
-  async function handleReceiptFile(e: React.ChangeEvent<HTMLInputElement>) {
+  // Shared: take a parsed receipt API response and push items into the review batch
+  function applyReceiptResult(result: any) {
+    setReceiptRetailer(result.retailer_name || 'Unknown Store')
+    setReceiptTotal(result.total || null)
+    const items: ReviewBatchItem[] = result.items.map((item: any, i: number) => ({
+      id: `r-${Date.now()}-${i}`,
+      source: 'receipt' as Mode,
+      name: item.normalized_name,
+      count: String(item.quantity || 1),
+      amountPerUnit: item.amount_per_unit != null ? String(item.amount_per_unit) : '',
+      unit: item.unit || 'item',
+      location: suggestLocation(item.normalized_name, item.category) as StorageLocation,
+      category: item.category || '',
+      expiryDate: '',
+      price: item.price || null,
+      selected: true,
+      retailer: result.retailer_name || '',
+      openedAt: '',
+      confidence: item.confidence,
+    }))
+    setReviewBatch(prev => {
+      const merged = [...prev, ...items]
+      const { updatedBatch, suggestions } = runAutoMatch(merged)
+      if (suggestions.length > 0) setMatchSuggestions(s => [...s, ...suggestions])
+      return updatedBatch
+    })
+    setStep('review')
+  }
+
+  async function handleReceiptFile(e: React.ChangeEvent<HTMLInputElement>, explicitSource?: ReceiptSourceType) {
     const file = e.target.files?.[0]
     if (!file) return
-    setReceiptPreview(URL.createObjectURL(file))
+    const isPDF = file.type === 'application/pdf'
+    const source: ReceiptSourceType = isPDF ? 'digital_pdf' : (explicitSource ?? 'library_image')
+    setReceiptSourceType(source)
+    setReceiptRawText(null)
+    if (!isPDF) {
+      setReceiptPreview(URL.createObjectURL(file))
+    } else {
+      setReceiptPreview(null)
+    }
     setReceiptLoading(true)
-    // Compress large photos before upload — prevents hitting the 5 MB API image limit
-    const uploadBlob = file.size > 1.4 * 1024 * 1024 ? await compressImage(file) : file
+    // Compress large images (skip for PDFs)
+    const uploadBlob = !isPDF && file.size > 1.4 * 1024 * 1024 ? await compressImage(file) : file
     const formData = new FormData()
     formData.append('receipt', uploadBlob)
     try {
       const res = await fetch('/api/parse-receipt', { method: 'POST', body: formData })
       const result = await res.json()
       if (result.error) { alert('Error: ' + result.error); setReceiptLoading(false); return }
-      setReceiptRetailer(result.retailer_name || 'Unknown Store')
-      setReceiptTotal(result.total || null)
-      const items: ReviewBatchItem[] = result.items.map((item: any, i: number) => ({
-        id: String(i),
-        source: 'receipt' as Mode,
-        name: item.normalized_name,
-        count: String(item.quantity || 1),
-        amountPerUnit: item.amount_per_unit != null ? String(item.amount_per_unit) : '',
-        unit: item.unit || 'item',
-        location: suggestLocation(item.normalized_name, item.category) as StorageLocation,
-        category: item.category || '',
-        expiryDate: '',
-        price: item.price || null,
-        selected: true,
-        retailer: result.retailer_name || '',
-        openedAt: '',
-        confidence: item.confidence,
-      }))
-      const newItems = items
-      setReviewBatch(prev => {
-        const merged = [...prev, ...newItems]
-        const { updatedBatch, suggestions } = runAutoMatch(merged)
-        if (suggestions.length > 0) setMatchSuggestions(s => [...s, ...suggestions])
-        return updatedBatch
+      applyReceiptResult(result)
+    } catch { alert('Something went wrong. Try again.') }
+    setReceiptLoading(false)
+  }
+
+  async function handlePasteText() {
+    if (!pasteText.trim()) return
+    setReceiptSourceType('pasted_text')
+    setReceiptRawText(pasteText.trim())
+    setReceiptPreview(null)
+    setReceiptLoading(true)
+    try {
+      const res = await fetch('/api/parse-receipt-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: pasteText.trim() }),
       })
-      setStep('review')
+      const result = await res.json()
+      if (result.error) { alert('Error: ' + result.error); setReceiptLoading(false); return }
+      applyReceiptResult(result)
     } catch { alert('Something went wrong. Try again.') }
     setReceiptLoading(false)
   }
@@ -653,7 +692,13 @@ export default function AddPage() {
     if (receiptItems.length > 0) {
       const { data: receiptData, error: receiptError } = await supabase
         .from('receipts')
-        .insert({ retailer_name: receiptRetailer, total: receiptTotal, user_id: userId })
+        .insert({
+          retailer_name: receiptRetailer,
+          total: receiptTotal,
+          user_id: userId,
+          source_type: receiptSourceType,
+          raw_text: receiptRawText,
+        })
         .select().single()
       if (receiptError) { alert('Error saving receipt: ' + receiptError.message); setSaving(false); return }
       const { data: riData, error: riError } = await supabase.from('receipt_items').insert(
@@ -899,7 +944,7 @@ export default function AddPage() {
             : <a href="/" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Home</a>
           }
           <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '32px', color: '#2d2d2d', margin: 0, flex: 1 }}>
-            {step === 'choose' ? 'Add Items' : step === 'capture' && mode === 'manual' ? 'Add Manually' : step === 'capture' && mode === 'voice' ? 'Voice Add' : step === 'capture' && mode === 'barcode' ? 'Scan Barcodes' : step === 'capture' && mode === 'receipt' ? 'Scan Receipt' : `Review (${reviewBatch.length})`}
+            {step === 'choose' ? 'Add Items' : step === 'capture' && mode === 'manual' ? 'Add Manually' : step === 'capture' && mode === 'voice' ? 'Voice Add' : step === 'capture' && mode === 'barcode' ? 'Scan Barcodes' : step === 'capture' && mode === 'receipt' ? 'Add Receipt' : `Review (${reviewBatch.length})`}
           </h1>
         </div>
 
@@ -910,7 +955,7 @@ export default function AddPage() {
           <>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
               {([
-                { mode: 'receipt',  emoji: '🧾', title: 'Scan Receipt',   desc: 'Photo of grocery receipt'    },
+                { mode: 'receipt',  emoji: '🧾', title: 'Add Receipt',   desc: 'Photo, PDF, or paste text'   },
                 { mode: 'barcode',  emoji: '📷', title: 'Scan Barcodes',  desc: 'Point camera at each item'   },
                 { mode: 'manual',   emoji: '📝', title: 'Add Manually',   desc: 'Type item details'           },
                 { mode: 'voice',    emoji: '🎤', title: 'Voice Add',      desc: 'Describe what you have'      },
@@ -1074,26 +1119,104 @@ export default function AddPage() {
               </>
             )}
 
-            {/* ── Receipt upload ── */}
+            {/* ── Receipt / digital receipt ── */}
             {mode === 'receipt' && (
-              <div style={{ background: 'white', borderRadius: '20px', padding: '28px 24px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', textAlign: 'center' }}>
-                <div style={{ fontSize: '56px', marginBottom: '12px' }}>🧾</div>
-                <h2 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '24px', color: '#2d2d2d', margin: '0 0 8px' }}>Scan a Receipt</h2>
-                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#aaa', margin: '0 0 24px', lineHeight: 1.5 }}>
-                  Take a photo of your grocery receipt. AI extracts all items automatically.
-                </p>
-                {receiptPreview && <img src={receiptPreview} alt="Receipt" style={{ maxWidth: '180px', maxHeight: '160px', borderRadius: '16px', marginBottom: '16px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }} />}
-                <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                  <label style={{ background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '17px', padding: '14px 28px', borderRadius: '50px', cursor: receiptLoading ? 'default' : 'pointer', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', display: 'inline-block', position: 'relative', opacity: receiptLoading ? 0.7 : 1 }}>
-                    📷 Take Photo
-                    <input type="file" accept="image/*" capture="environment" onChange={handleReceiptFile} disabled={receiptLoading} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
-                  </label>
-                  <label style={{ background: 'white', color: '#ff7043', border: '2px solid #ff7043', fontFamily: "'Fredoka One',cursive", fontSize: '17px', padding: '14px 28px', borderRadius: '50px', cursor: receiptLoading ? 'default' : 'pointer', display: 'inline-block', position: 'relative', opacity: receiptLoading ? 0.7 : 1 }}>
-                    🖼 From Library
-                    <input ref={receiptFileRef} type="file" accept="image/*" onChange={handleReceiptFile} disabled={receiptLoading} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
-                  </label>
-                </div>
-                {receiptLoading && <p style={{ color: '#ff7043', fontWeight: 700, fontSize: '15px', fontFamily: "'Nunito',sans-serif", marginTop: '12px' }}>AI is reading your receipt…</p>}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+
+                {/* Preview */}
+                {receiptPreview && (
+                  <div style={{ textAlign: 'center' }}>
+                    <img src={receiptPreview} alt="Receipt" style={{ maxWidth: '180px', maxHeight: '160px', borderRadius: '16px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)' }} />
+                  </div>
+                )}
+
+                {receiptLoading && (
+                  <div style={{ background: 'white', borderRadius: '16px', padding: '20px', textAlign: 'center', boxShadow: '0 2px 10px rgba(0,0,0,0.07)' }}>
+                    <p style={{ color: '#ff7043', fontWeight: 700, fontSize: '15px', fontFamily: "'Nunito',sans-serif", margin: 0 }}>
+                      AI is reading your receipt…
+                    </p>
+                  </div>
+                )}
+
+                {!receiptLoading && (
+                  <>
+                    {/* Paper receipt */}
+                    <div style={{ background: 'white', borderRadius: '20px', padding: '20px', boxShadow: '0 2px 12px rgba(0,0,0,0.07)' }}>
+                      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: '0 0 4px' }}>📋 Paper Receipt</p>
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '0 0 14px' }}>
+                        Take a photo or pick one from your library
+                      </p>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <label style={{ flex: 1, minWidth: '120px', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '16px', padding: '12px 16px', borderRadius: '14px', cursor: 'pointer', boxShadow: '0 6px 18px rgba(255,112,67,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', position: 'relative', textAlign: 'center' }}>
+                          📷 Take Photo
+                          <input type="file" accept="image/*" capture="environment" onChange={e => handleReceiptFile(e, 'photo')} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+                        </label>
+                        <label style={{ flex: 1, minWidth: '120px', background: 'white', color: '#ff7043', border: '2px solid #ff7043', fontFamily: "'Fredoka One',cursive", fontSize: '16px', padding: '12px 16px', borderRadius: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', position: 'relative', textAlign: 'center' }}>
+                          🖼 From Library
+                          <input ref={receiptFileRef} type="file" accept="image/*" onChange={e => handleReceiptFile(e, 'library_image')} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Digital receipt */}
+                    <div style={{ background: 'white', borderRadius: '20px', padding: '20px', boxShadow: '0 2px 12px rgba(0,0,0,0.07)' }}>
+                      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: '0 0 4px' }}>💻 Digital Receipt</p>
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '0 0 14px' }}>
+                        Upload a screenshot or PDF, or paste the text
+                      </p>
+
+                      {/* Screenshot / PDF upload */}
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#fff8f5', border: '2px dashed rgba(255,112,67,0.3)', borderRadius: '12px', padding: '12px 16px', cursor: 'pointer', marginBottom: '10px', position: 'relative' }}>
+                        <span style={{ fontSize: '20px' }}>📤</span>
+                        <div>
+                          <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#ff7043', display: 'block' }}>
+                            Upload screenshot or PDF
+                          </span>
+                          <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb' }}>
+                            Supports images and .pdf files
+                          </span>
+                        </div>
+                        <input type="file" accept="image/*,application/pdf" onChange={e => handleReceiptFile(e, 'digital_screenshot')} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }} />
+                      </label>
+
+                      {/* Paste text toggle */}
+                      {!pasteVisible ? (
+                        <button
+                          onClick={() => setPasteVisible(true)}
+                          style={{ ...btnBase, width: '100%', background: '#f5f5f5', color: '#888', fontSize: '14px', borderRadius: '12px', padding: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                        >
+                          📋 Paste receipt text
+                        </button>
+                      ) : (
+                        <div>
+                          <textarea
+                            autoFocus
+                            value={pasteText}
+                            onChange={e => setPasteText(e.target.value)}
+                            placeholder={"Paste your receipt or order confirmation here…\n\nWorks with emails, Tesco/Sainsbury's/Ocado orders, etc."}
+                            rows={7}
+                            style={{ width: '100%', boxSizing: 'border-box', border: '2px solid #ff7043', borderRadius: '12px', padding: '12px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '13px', color: '#2d2d2d', resize: 'vertical', outline: 'none', marginBottom: '10px' }}
+                          />
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              onClick={handlePasteText}
+                              disabled={!pasteText.trim()}
+                              style={{ ...btnBase, flex: 1, background: pasteText.trim() ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : '#eee', color: pasteText.trim() ? 'white' : '#bbb', padding: '11px', fontSize: '15px', fontFamily: "'Fredoka One',cursive", boxShadow: pasteText.trim() ? '0 6px 18px rgba(255,112,67,0.35)' : 'none' }}
+                            >
+                              🔍 Extract Items
+                            </button>
+                            <button
+                              onClick={() => { setPasteVisible(false); setPasteText('') }}
+                              style={{ ...btnBase, background: '#f5f5f5', color: '#aaa', padding: '11px 16px' }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </>
@@ -1110,6 +1233,9 @@ export default function AddPage() {
                 {receiptRetailer && reviewBatch.some(i => i.source === 'receipt') && (
                   <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#888', margin: '0 0 2px' }}>
                     From {receiptRetailer}{receiptTotal ? ` — £${receiptTotal.toFixed(2)}` : ''}
+                    {receiptSourceType === 'digital_pdf' && <span style={{ marginLeft: '6px', fontSize: '11px', background: '#e8f4fd', color: '#2196f3', padding: '2px 6px', borderRadius: '50px', fontWeight: 700 }}>📄 PDF</span>}
+                    {receiptSourceType === 'digital_screenshot' && <span style={{ marginLeft: '6px', fontSize: '11px', background: '#e8f4fd', color: '#2196f3', padding: '2px 6px', borderRadius: '50px', fontWeight: 700 }}>💻 Screenshot</span>}
+                    {receiptSourceType === 'pasted_text' && <span style={{ marginLeft: '6px', fontSize: '11px', background: '#e8f4fd', color: '#2196f3', padding: '2px 6px', borderRadius: '50px', fontWeight: 700 }}>📋 Pasted text</span>}
                   </p>
                 )}
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: 0 }}>

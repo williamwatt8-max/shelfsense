@@ -3,6 +3,15 @@ export type StorageLocation   = 'fridge' | 'freezer' | 'cupboard' | 'other' | 'h
 export type EventType         = 'added' | 'used' | 'used_some' | 'moved' | 'discarded' | 'expired' | 'opened'
 export type InventorySource   = 'receipt' | 'manual' | 'barcode' | 'voice'
 
+// How a receipt entered ShelfSense
+export type ReceiptSourceType =
+  | 'photo'              // camera capture of a paper receipt
+  | 'library_image'      // image picked from device photo library
+  | 'digital_screenshot' // screenshot of a digital receipt / order page
+  | 'digital_pdf'        // PDF receipt / order confirmation
+  | 'pasted_text'        // user pasted raw receipt/order text
+  | 'forwarded_email'    // future: email forwarding ingestion
+
 export type Receipt = {
   id: string
   user_id: string | null
@@ -11,6 +20,7 @@ export type Receipt = {
   raw_text: string | null
   image_url: string | null
   total: number | null
+  source_type: ReceiptSourceType
   created_at: string
 }
 

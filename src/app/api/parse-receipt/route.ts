@@ -1,9 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
+import { normalizeReceiptItems } from '@/lib/receiptParser'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-const PARSE_PROMPT = `You are a specialist UK supermarket receipt parser. Extract every purchased item from this receipt image.
+// ── Prompt: paper receipt image (photo / library / screenshot) ────────────────
+
+const IMAGE_PARSE_PROMPT = `You are a specialist UK supermarket receipt parser. Extract every purchased item from this receipt image.
 
 STEP 1 — IDENTIFY RETAILER
 Read the header, logo, or store name at the top of the receipt. Identify the retailer (e.g. Morrisons, M&S, Tesco, Sainsbury's, Asda, Waitrose, Co-op, Lidl, Aldi).
@@ -59,6 +62,32 @@ STEP 4 — OUTPUT FORMAT
 Return ONLY raw JSON — no markdown, no code fences, no explanation:
 {"retailer_name":"Morrisons","total":24.99,"items":[{"raw_text":"M SEMI SKIM MILK 2L","normalized_name":"Semi-Skimmed Milk","quantity":1,"amount_per_unit":2000,"unit":"ml","category":"dairy","confidence":0.9,"price":1.09}]}`
 
+// ── Prompt: PDF receipt / order confirmation document ─────────────────────────
+
+const PDF_PARSE_PROMPT = `You are a specialist receipt/order confirmation parser. Extract every purchased item from this PDF document.
+
+The document may be a supermarket PDF receipt, an online order confirmation, a delivery note, or similar.
+
+EXTRACTION RULES
+1. raw_text: the product line as it appears in the document
+2. normalized_name: clear, human-readable product name only — no size/weight suffix (those go in amount_per_unit/unit). Expand abbreviations, remove item codes/SKUs
+3. quantity: number of units purchased (default 1)
+   MULTI-PACK PATTERN: "6 x 400g" → quantity:6, amount_per_unit:400, unit:"g"
+4. amount_per_unit: size of each unit as a plain number in base units (ml not l, g not kg). Null if not applicable (e.g. single items without a measured size). Convert: L→ml (×1000), kg→g (×1000)
+5. unit: "ml" | "g" | "item"
+6. category: dairy | meat | fish | vegetables | fruit | bakery | tinned | dry goods | oils | frozen | drinks | snacks | alcohol | household | pet | other
+7. confidence: 0.9=clearly identified product, 0.7=some ambiguity, 0.5=best guess
+8. price: per-unit price as a positive number < 999. For multi-packs: total ÷ quantity. Null if not shown
+9. retailer_name: extract from the document if visible (e.g. "Tesco", "Ocado", "Amazon Fresh")
+10. total: order/receipt total if visible
+
+SKIP: delivery charges, service fees, VAT summary lines, payment method lines, loyalty points, promotional text, headers, footers, order reference numbers.
+
+Include ALL purchased items including non-food.
+
+Return ONLY raw JSON — no markdown, no code fences:
+{"retailer_name":"Ocado","total":65.40,"items":[{"raw_text":"...","normalized_name":"...","quantity":1,"amount_per_unit":null,"unit":"item","category":"other","confidence":0.9,"price":2.50}]}`
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
@@ -69,98 +98,62 @@ export async function POST(req: NextRequest) {
 
     const bytes = await file.arrayBuffer()
     const base64 = Buffer.from(bytes).toString('base64')
+    const isPDF = file.type === 'application/pdf'
 
-    let mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' = 'image/jpeg'
-    if (file.type === 'image/png') mediaType = 'image/png'
-    if (file.type === 'image/webp') mediaType = 'image/webp'
+    let contentBlocks: any[]
+    if (isPDF) {
+      contentBlocks = [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
+        { type: 'text', text: PDF_PARSE_PROMPT },
+      ]
+    } else {
+      let mediaType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif' = 'image/jpeg'
+      if (file.type === 'image/png') mediaType = 'image/png'
+      if (file.type === 'image/webp') mediaType = 'image/webp'
+      contentBlocks = [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: IMAGE_PARSE_PROMPT },
+      ]
+    }
 
     const message = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 8192,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: mediaType, data: base64 },
-            },
-            { type: 'text', text: PARSE_PROMPT },
-          ],
-        },
-      ],
+      messages: [{ role: 'user', content: contentBlocks }],
     })
 
     const responseText = message.content[0].type === 'text' ? message.content[0].text : ''
-    // Strip any accidental markdown fences
-    const cleaned = responseText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
-
-    try {
-      const parsed = JSON.parse(cleaned)
-
-      if (!parsed.items || !Array.isArray(parsed.items)) {
-        parsed.items = []
-      }
-
-      parsed.items = parsed.items.map((item: any) => {
-        // Price sanity: must be a positive number < 999
-        const rawPrice = item.price != null ? Number(item.price) : null
-        const price = rawPrice != null && rawPrice > 0 && rawPrice < 999 ? parseFloat(rawPrice.toFixed(2)) : null
-
-        // amount_per_unit: must be a positive number
-        const rawApu = item.amount_per_unit != null ? Number(item.amount_per_unit) : null
-        const amount_per_unit = rawApu != null && rawApu > 0 ? rawApu : null
-
-        // unit: only 'ml', 'g', or 'item'; default to 'item' when no measured size
-        const rawUnit = String(item.unit || 'item').toLowerCase()
-        const unit = ['ml', 'g', 'kg', 'l'].includes(rawUnit)
-          ? (rawUnit === 'kg' ? 'g' : rawUnit === 'l' ? 'ml' : rawUnit)
-          : (amount_per_unit ? rawUnit : 'item')
-
-        // If unit was 'kg' or 'l', convert amount_per_unit too (model should have done this, but be safe)
-        const convertedApu = item.unit === 'kg' && rawApu
-          ? rawApu * 1000
-          : item.unit === 'l' && rawApu
-            ? rawApu * 1000
-            : amount_per_unit
-
-        return {
-          raw_text: String(item.raw_text || ''),
-          normalized_name: String(item.normalized_name || item.raw_text || 'Unknown item'),
-          quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
-          amount_per_unit: convertedApu,
-          unit,
-          category: item.category || 'other',
-          confidence: Math.min(1, Math.max(0, Number(item.confidence) || 0.7)),
-          price,
-        }
-      })
-
-      return NextResponse.json(parsed)
-    } catch {
-      console.error('Failed to parse JSON response. Raw (first 800 chars):', cleaned.substring(0, 800))
-
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
-      if (jsonMatch) {
-        try {
-          const salvaged = JSON.parse(jsonMatch[0])
-          if (!Array.isArray(salvaged.items)) salvaged.items = []
-          return NextResponse.json(salvaged)
-        } catch {
-          // salvage attempt also failed
-        }
-      }
-
-      return NextResponse.json(
-        { error: 'Receipt could not be read. Try a clearer photo or better lighting.' },
-        { status: 422 }
-      )
-    }
+    return parseAndNormalize(responseText)
   } catch (error: any) {
     console.error('Parse receipt API error:', error.message)
     return NextResponse.json(
       { error: error.message || 'Failed to parse receipt' },
       { status: 500 }
+    )
+  }
+}
+
+function parseAndNormalize(responseText: string): Response {
+  const cleaned = responseText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+  try {
+    const parsed = JSON.parse(cleaned)
+    if (!parsed.items || !Array.isArray(parsed.items)) parsed.items = []
+    parsed.items = normalizeReceiptItems(parsed.items)
+    return NextResponse.json(parsed)
+  } catch {
+    console.error('Failed to parse JSON response. Raw (first 800 chars):', cleaned.substring(0, 800))
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      try {
+        const salvaged = JSON.parse(jsonMatch[0])
+        if (!Array.isArray(salvaged.items)) salvaged.items = []
+        salvaged.items = normalizeReceiptItems(salvaged.items)
+        return NextResponse.json(salvaged)
+      } catch { /* fall through */ }
+    }
+    return NextResponse.json(
+      { error: 'Receipt could not be read. Try a clearer photo or better lighting.' },
+      { status: 422 }
     )
   }
 }
