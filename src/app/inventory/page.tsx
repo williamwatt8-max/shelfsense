@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { InventoryItem } from '@/lib/types'
+import { InventoryItem, KnownProduct } from '@/lib/types'
 import { differenceInDays } from 'date-fns'
 import { lookupShelfLife } from '@/lib/shelfLife'
 import { compressImage } from '@/lib/compressImage'
@@ -69,6 +69,7 @@ type VoiceAction = {
 
 export default function InventoryPage() {
   const [items, setItems]           = useState<InventoryItem[]>([])
+  const [knownProducts, setKnownProducts] = useState<KnownProduct[]>([])
   const [filter, setFilter]         = useState<string>('all')
   const [sortBy, setSortBy]         = useState<string>('date_added')
   const [grouped, setGrouped]       = useState<boolean>(true)
@@ -136,6 +137,8 @@ export default function InventoryPage() {
       receipt_items: undefined,
     }))
     setItems(mapped)
+    const { data: kpData } = await supabase.from('known_products').select('*').eq('user_id', userId)
+    setKnownProducts((kpData || []) as KnownProduct[])
     setLoading(false)
   }
 
@@ -729,6 +732,7 @@ export default function InventoryPage() {
 
   const sorted       = sortItems(filtered)
   const groupedItems = groupItems(filtered)
+  const knownByBarcode = new Map(knownProducts.map(k => [k.barcode, k]))
 
   // ── Derived counts & stock value ──────────────────────────────────────────
 
@@ -897,64 +901,63 @@ export default function InventoryPage() {
     unit: string; createdAt: string; openedAt: string | null; price: number | null
     retailer?: string | null; hasBatches?: boolean
     source?: string; barcode?: string | null
+    isKnown?: boolean; isFavourite?: boolean; hasExpiry?: boolean
   }
 
-  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, hasBatches, source, barcode }: HeaderProps) => {
-    const qtyDisplay = (() => {
-      const fmt = (n: number) => n % 1 === 0 ? String(n) : n.toFixed(1)
-      // `quantity` prop is now remaining_quantity (passed in from item.remaining_quantity ?? item.quantity)
-      const remaining = quantity
-      // Derive the "original total" from purchase structure
-      const packTotal = (itemCount && itemCount > 0 && amountPerUnit)
-        ? itemCount * amountPerUnit
-        : amountPerUnit ?? null
-      const looseTotal = (!amountPerUnit && itemCount) ? itemCount : null
-      const originalTotal = packTotal ?? looseTotal
+  const ItemHeaderLeft = ({ name, location, quantity, quantityOriginal, itemCount, amountPerUnit, unit, createdAt, openedAt, price, retailer, source, isKnown, isFavourite, hasExpiry }: HeaderProps) => {
+    const fmt = (n: number) => n % 1 === 0 ? String(n) : n.toFixed(1)
+    const remaining = quantity
+    const packTotal = (itemCount && itemCount > 0 && amountPerUnit) ? itemCount * amountPerUnit : amountPerUnit ?? null
+    const originalTotal = packTotal ?? ((!amountPerUnit && itemCount) ? itemCount : null)
+    const isPartial = originalTotal != null && remaining < originalTotal - 0.001
 
-      // Detect partial use (allow 0.1% float tolerance)
-      const isPartial = originalTotal != null && remaining < originalTotal - 0.001
+    let qtyLine: string
+    if (itemCount && itemCount > 1 && amountPerUnit) {
+      qtyLine = isPartial ? `${fmt(remaining)} / ${fmt(packTotal!)} ${unit}` : `${itemCount} × ${fmt(amountPerUnit)} ${unit}`
+    } else if (amountPerUnit) {
+      qtyLine = isPartial ? `${fmt(remaining)} / ${fmt(amountPerUnit)} ${unit}` : `${fmt(amountPerUnit)} ${unit}`
+    } else {
+      qtyLine = isPartial ? `${fmt(remaining)} / ${fmt(originalTotal!)} ${unit}` : `${fmt(remaining)} ${unit}`
+    }
 
-      if (itemCount && itemCount > 1 && amountPerUnit) {
-        if (isPartial) return `${fmt(remaining)} of ${fmt(packTotal!)} ${unit} remaining`
-        return `${itemCount} × ${amountPerUnit} ${unit}`
-      }
-      if (amountPerUnit) {
-        if (isPartial) return `${fmt(remaining)} of ${fmt(amountPerUnit)} ${unit} remaining`
-        return `${fmt(amountPerUnit)} ${unit}`
-      }
-      // Plain count-based item
-      if (isPartial) return `${fmt(remaining)} of ${fmt(originalTotal!)} ${unit} remaining`
-      return `${fmt(remaining)} ${unit}`
-    })()
+    const isManual = source === 'manual' || source === 'voice'
+
     return (
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {/* Row 1: name + trust signal */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '2px', minWidth: 0 }}>
+          <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {name}
           </h3>
+          {isFavourite && <span title="Favourite product" style={{ fontSize: '12px', lineHeight: 1, flexShrink: 0 }}>⭐</span>}
+          {isKnown && !isFavourite && (
+            <span title="Known barcode product" style={{ width: '15px', height: '15px', borderRadius: '50%', background: 'rgba(76,175,80,0.18)', color: '#4caf50', fontSize: '9px', fontWeight: 900, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: "'Nunito',sans-serif" }}>✓</span>
+          )}
           {location === 'household' && (
-            <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🏠 household</span>
+            <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🏠</span>
           )}
-          {openedAt && (
-            <span style={{ background: 'rgba(32,178,170,0.12)', color: '#20b2aa', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🔓 {formatOpenedDate(openedAt)}</span>
-          )}
-          {retailer && (
-            <span style={{ background: 'rgba(255,112,67,0.1)', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>{retailer}</span>
-          )}
-          {hasBatches && (
-            <span style={{ background: '#fff5f0', color: '#ff7043', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>batches</span>
-          )}
-          {source === 'barcode' && barcode && (
-            <span style={{ background: 'rgba(74,144,217,0.1)', color: '#4a90d9', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>📷 barcode</span>
-          )}
-          {source === 'voice' && (
-            <span style={{ background: 'rgba(156,39,176,0.1)', color: '#9c27b0', fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🎤 voice</span>
+          {isManual && !isKnown && (
+            <span title="Manually entered" style={{ background: '#f5f5f5', color: '#ccc', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>manual</span>
           )}
         </div>
-        <p style={{ color: '#ccc', fontSize: '11px', fontWeight: 600, margin: '3px 0 0', fontFamily: "'Nunito',sans-serif", display: 'flex', gap: '6px', flexWrap: 'wrap' as const }}>
-          <span style={{ color: '#bbb', fontWeight: 700 }}>{qtyDisplay} · {location}</span>
-          <span>· added {formatDateAdded(createdAt)}</span>
-          {price != null ? <span style={{ color: '#d4a96e' }}>· £{price.toFixed(2)}</span> : <span style={{ color: '#ddd' }}>· no price</span>}
+        {/* Row 2: quantity — prominent */}
+        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', margin: '0 0 1px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' as const }}>
+          <span>{qtyLine}</span>
+          {openedAt && (
+            <span style={{ background: 'rgba(32,178,170,0.1)', color: '#20b2aa', fontSize: '10px', fontWeight: 700, padding: '1px 7px', borderRadius: '50px' }}>🔓 {formatOpenedDate(openedAt)}</span>
+          )}
+        </p>
+        {/* Row 3: meta — subtle */}
+        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: 0, display: 'flex', gap: '3px', flexWrap: 'wrap' as const, alignItems: 'center' }}>
+          <span style={{ color: '#ccc' }}>{location}</span>
+          {retailer && <><span>·</span><span style={{ color: '#ccc' }}>{retailer}</span></>}
+          <span>·</span><span>added {formatDateAdded(createdAt)}</span>
+          {price != null
+            ? <><span>·</span><span style={{ color: '#d4a96e' }}>£{price.toFixed(2)}</span></>
+            : <><span>·</span><span style={{ color: '#e0e0e0' }}>no price</span></>}
+          {!hasExpiry && location !== 'household' && (
+            <><span>·</span><span style={{ color: '#e6c47a' }}>no expiry</span></>
+          )}
         </p>
       </div>
     )
@@ -1228,7 +1231,7 @@ export default function InventoryPage() {
                     <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
-                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} source={!hasBatches ? repBatch.source : undefined} barcode={!hasBatches ? repBatch.barcode : undefined} />
+                        <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} source={!hasBatches ? repBatch.source : undefined} barcode={!hasBatches ? repBatch.barcode : undefined} isKnown={!hasBatches && !!repBatch.barcode && knownByBarcode.has(repBatch.barcode!)} isFavourite={!hasBatches && !!repBatch.barcode && (knownByBarcode.get(repBatch.barcode!)?.is_favourite ?? false)} hasExpiry={!hasBatches ? !!repBatch.expiry_date : !!group.nearestExpiry} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
                           {group.location !== 'household' && !selectMode && !hasBatches && (
@@ -1291,7 +1294,7 @@ export default function InventoryPage() {
                     <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
-                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} source={item.source} barcode={item.barcode} />
+                        <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} source={item.source} barcode={item.barcode} isKnown={!!item.barcode && knownByBarcode.has(item.barcode)} isFavourite={!!item.barcode && (knownByBarcode.get(item.barcode)?.is_favourite ?? false)} hasExpiry={!!item.expiry_date} />
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
                           {item.location !== 'household' && !selectMode && (

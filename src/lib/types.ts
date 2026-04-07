@@ -134,6 +134,7 @@ export type KnownProduct = {
   unit: string
   usual_retailer: string | null
   times_purchased: number
+  is_favourite: boolean
   last_seen_at: string
   created_at: string
 }

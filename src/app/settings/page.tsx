@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { signOut } from '@/lib/auth'
 
@@ -105,6 +106,24 @@ export default function SettingsPage() {
                 )
               })}
             </div>
+          </div>
+
+          {/* Data */}
+          <div style={card}>
+            <h2 style={h2}>📦 Your Data</h2>
+            <Link
+              href="/known-products"
+              style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '12px 0', textDecoration: 'none',
+              }}
+            >
+              <div>
+                <span style={{ fontWeight: 700, color: '#2d2d2d', fontSize: '14px', display: 'block' }}>⭐ Known Products</span>
+                <span style={{ fontWeight: 600, color: '#aaa', fontSize: '12px' }}>Manage your scanned product memory</span>
+              </div>
+              <span style={{ color: '#ccc', fontSize: '18px' }}>›</span>
+            </Link>
           </div>
 
           {/* Account */}
