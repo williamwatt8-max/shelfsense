@@ -944,7 +944,7 @@ export default function AddPage() {
             : <a href="/" style={{ color: '#ff7043', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>← Home</a>
           }
           <h1 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '32px', color: '#2d2d2d', margin: 0, flex: 1 }}>
-            {step === 'choose' ? 'Add Items' : step === 'capture' && mode === 'manual' ? 'Add Manually' : step === 'capture' && mode === 'voice' ? 'Voice Add' : step === 'capture' && mode === 'barcode' ? 'Scan Barcodes' : step === 'capture' && mode === 'receipt' ? 'Add Receipt' : `Review (${reviewBatch.length})`}
+            {step === 'choose' ? 'Add Items' : step === 'capture' && mode === 'manual' ? 'Add Manually' : step === 'capture' && mode === 'voice' ? 'Voice Add' : step === 'capture' && mode === 'barcode' ? 'Scan Items' : step === 'capture' && mode === 'receipt' ? 'Add a Receipt' : `Review (${reviewBatch.length})`}
           </h1>
         </div>
 
@@ -953,17 +953,56 @@ export default function AddPage() {
         ═══════════════════════════════════════════════════════════════════ */}
         {step === 'choose' && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
               {([
-                { mode: 'receipt',  emoji: '🧾', title: 'Add Receipt',   desc: 'Photo, PDF, or paste text'   },
-                { mode: 'barcode',  emoji: '📷', title: 'Scan Barcodes',  desc: 'Point camera at each item'   },
-                { mode: 'manual',   emoji: '📝', title: 'Add Manually',   desc: 'Type item details'           },
-                { mode: 'voice',    emoji: '🎤', title: 'Voice Add',      desc: 'Describe what you have'      },
-              ] as { mode: Mode; emoji: string; title: string; desc: string }[]).map(opt => (
-                <button key={opt.mode} onClick={() => goToCapture(opt.mode)} style={{ background: 'white', borderRadius: '20px', padding: '22px 16px', boxShadow: '0 2px 12px rgba(0,0,0,0.07)', border: '2px solid transparent', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s' }}>
-                  <div style={{ fontSize: '36px', marginBottom: '10px', lineHeight: 1 }}>{opt.emoji}</div>
-                  <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', marginBottom: '4px' }}>{opt.title}</div>
-                  <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', lineHeight: 1.4 }}>{opt.desc}</div>
+                {
+                  mode: 'receipt',
+                  emoji: '🧾',
+                  title: 'Add a Receipt',
+                  desc: 'Scan a photo, upload a PDF, or paste order text',
+                  accent: true,
+                },
+                {
+                  mode: 'barcode',
+                  emoji: '📦',
+                  title: 'Scan Items',
+                  desc: 'Point the camera at each barcode to build a list',
+                  accent: false,
+                },
+                {
+                  mode: 'manual',
+                  emoji: '✍️',
+                  title: 'Add Manually',
+                  desc: 'Type item details or describe them by voice',
+                  accent: false,
+                },
+              ] as { mode: Mode; emoji: string; title: string; desc: string; accent: boolean }[]).map(opt => (
+                <button
+                  key={opt.mode}
+                  onClick={() => goToCapture(opt.mode)}
+                  style={{
+                    background: 'white',
+                    borderRadius: '20px',
+                    padding: '20px 22px',
+                    boxShadow: '0 2px 12px rgba(0,0,0,0.07)',
+                    border: opt.accent ? '2px solid rgba(255,112,67,0.25)' : '2px solid transparent',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                  }}
+                >
+                  <div style={{ fontSize: '40px', lineHeight: 1, flexShrink: 0 }}>{opt.emoji}</div>
+                  <div>
+                    <div style={{ fontFamily: "'Fredoka One',cursive", fontSize: '20px', color: opt.accent ? '#ff7043' : '#2d2d2d', marginBottom: '3px' }}>
+                      {opt.title}
+                    </div>
+                    <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '13px', color: '#bbb', lineHeight: 1.4 }}>
+                      {opt.desc}
+                    </div>
+                  </div>
+                  <div style={{ marginLeft: 'auto', color: '#ddd', fontSize: '20px', flexShrink: 0 }}>›</div>
                 </button>
               ))}
             </div>
@@ -982,7 +1021,7 @@ export default function AddPage() {
         ═══════════════════════════════════════════════════════════════════ */}
         {step === 'capture' && (
           <>
-            {/* ── Voice capture ── */}
+            {/* ── Voice capture (standalone — reachable via ?mode=voice URL param) ── */}
             {mode === 'voice' && (
               <div style={{ background: 'white', borderRadius: '16px', padding: '24px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)', textAlign: 'center' }}>
                 <div style={{ fontSize: '48px', marginBottom: '8px' }}>🎤</div>
@@ -990,44 +1029,74 @@ export default function AddPage() {
                   {voiceListening ? 'Recording…' : voiceProcessing ? 'Understanding…' : 'Voice Add'}
                 </p>
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#bbb', margin: '0 0 20px', lineHeight: 1.5 }}>
-                  {voiceListening
-                    ? 'Speak your items, then tap Stop when done'
-                    : 'Say one or more items, then tap Stop. e.g. "6 cans of Coke, milk 2 litres expiring Friday"'}
+                  {voiceListening ? 'Speak your items, then tap Stop when done' : 'Say one or more items, then tap Stop. e.g. "6 cans of Coke, milk 2 litres expiring Friday"'}
                 </p>
-
                 {!voiceListening && !voiceProcessing && (
-                  <button onClick={startVoice}
-                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
+                  <button onClick={startVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
                     <span style={{ fontSize: '20px' }}>🎤</span> Tap to speak
                   </button>
                 )}
-
                 {voiceListening && (
-                  <button onClick={stopVoice}
-                    style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,68,68,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>
+                  <button onClick={stopVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,68,68,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>
                     <span style={{ fontSize: '20px' }}>🔴</span> Stop Recording
                   </button>
                 )}
-
-                {voiceProcessing && (
-                  <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', color: '#ff7043', marginTop: '4px' }}>
-                    Parsing items…
-                  </div>
-                )}
-
+                {voiceProcessing && <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', color: '#ff7043', marginTop: '4px' }}>Parsing items…</div>}
                 {voiceTranscript && !voiceListening && !voiceProcessing && (
                   <div style={{ marginTop: '16px', background: '#f9f9f9', borderRadius: '10px', padding: '10px 14px', textAlign: 'left' }}>
                     <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '0 0 4px' }}>You said:</p>
                     <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
                   </div>
                 )}
-
                 {voiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '16px 0 0' }}>😕 {voiceError}</p>}
               </div>
             )}
 
-            {/* ── Manual capture ── */}
-            {mode === 'manual' && itemFormJSX}
+            {/* ── Manual capture (includes inline voice shortcut) ── */}
+            {mode === 'manual' && (
+              <>
+                {/* Compact voice section */}
+                <div style={{ background: 'white', borderRadius: '16px', padding: '16px 20px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: 0 }}>🎤 Voice input</p>
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '2px 0 0' }}>
+                        {voiceListening ? 'Listening — tap Stop when done' : voiceProcessing ? 'Understanding your items…' : 'Describe items and they\'ll be added'}
+                      </p>
+                    </div>
+                    {!voiceListening && !voiceProcessing && (
+                      <button onClick={startVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '14px', padding: '9px 18px', boxShadow: '0 4px 12px rgba(255,112,67,0.35)', flexShrink: 0 }}>
+                        🎤 Speak
+                      </button>
+                    )}
+                    {voiceListening && (
+                      <button onClick={stopVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '14px', padding: '9px 18px', boxShadow: '0 4px 12px rgba(255,68,68,0.3)', animation: 'voice-pulse 0.9s ease-in-out infinite', flexShrink: 0 }}>
+                        🔴 Stop
+                      </button>
+                    )}
+                    {voiceProcessing && (
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043', flexShrink: 0 }}>Parsing…</span>
+                    )}
+                  </div>
+                  {voiceTranscript && !voiceListening && !voiceProcessing && (
+                    <div style={{ marginTop: '10px', background: '#f9f9f9', borderRadius: '10px', padding: '8px 12px' }}>
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '0 0 2px' }}>You said:</p>
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
+                    </div>
+                  )}
+                  {voiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff4444', margin: '8px 0 0' }}>😕 {voiceError}</p>}
+                </div>
+
+                {/* Divider */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                  <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
+                  <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', whiteSpace: 'nowrap' }}>or fill in the form</span>
+                  <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
+                </div>
+
+                {itemFormJSX}
+              </>
+            )}
 
             {/* ── Success flash after adding ── */}
             {addedName && (
