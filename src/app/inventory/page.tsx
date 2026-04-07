@@ -87,6 +87,7 @@ export default function InventoryPage() {
   const [fabOpen, setFabOpen]                   = useState(false)
   const [quickExpiryId,   setQuickExpiryId]   = useState<string | null>(null)
   const [quickExpiryDate, setQuickExpiryDate] = useState('')
+  const [removeConfirmId, setRemoveConfirmId] = useState<string | null>(null)
 
   // ── Enrichment state (in edit modal) ──────────────────────────────────────
   const [enrichMode,           setEnrichMode]           = useState<EnrichMode>(null)
@@ -235,6 +236,18 @@ export default function InventoryPage() {
     await supabase.from('inventory_items').update({ status: 'discarded' }).eq('id', id)
     await supabase.from('inventory_events').insert({ inventory_item_id: id, type: 'discarded' })
     setExpandedId(null)
+    setToast('🗑️ Marked as wasted')
+    setTimeout(() => setToast(null), 2000)
+    loadItems()
+  }
+
+  async function markRemoved(id: string) {
+    await supabase.from('inventory_items').update({ status: 'removed' }).eq('id', id)
+    await supabase.from('inventory_events').insert({ inventory_item_id: id, type: 'removed' })
+    setExpandedId(null)
+    setRemoveConfirmId(null)
+    setToast('✕ Item removed')
+    setTimeout(() => setToast(null), 2000)
     loadItems()
   }
 
@@ -342,7 +355,7 @@ export default function InventoryPage() {
     await supabase.from('inventory_events').insert(ids.map(id => ({ inventory_item_id: id, type: 'discarded' })))
     setSelectedIds(new Set())
     setSelectMode(false)
-    setToast(`🗑️ ${ids.length} item${ids.length > 1 ? 's' : ''} discarded`)
+    setToast(`🗑️ ${ids.length} item${ids.length > 1 ? 's' : ''} marked as wasted`)
     setTimeout(() => setToast(null), 2500)
     loadItems()
   }
@@ -680,8 +693,8 @@ export default function InventoryPage() {
     const d = daysLeft(item.expiry_date)
     const isExpired = d !== null && d < 0
     if (filter === 'expired')  return isExpired
-    if (isExpired)             return false   // expired items only appear in the Expired tab
     if (filter === 'expiring') return d !== null && d >= 0 && d <= 7
+    // 'all' and location tabs include expired items — they need action and must not disappear
     if (filter === 'all')      return true
     return item.location === filter
   })
@@ -855,11 +868,23 @@ export default function InventoryPage() {
 
   const actionArea = (item: InventoryItem) => {
     if (usingItem?.id === item.id) return partialUsePanel(item)
+    if (removeConfirmId === item.id) return (
+      <div style={{ background: '#fff0f0', border: '1.5px solid rgba(255,68,68,0.25)', borderRadius: '10px', padding: '10px 14px', marginBottom: '8px' }}>
+        <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#cc3333', margin: '0 0 8px' }}>
+          Remove this item permanently? It won't count as waste.
+        </p>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={() => markRemoved(item.id)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', padding: '7px 16px' }}>Yes, remove</button>
+          <button onClick={() => setRemoveConfirmId(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
+        </div>
+      </div>
+    )
     return (
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
         <button onClick={() => startUseOpen(item)} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ {item.opened_at ? 'Use some' : 'Use / Open'}</button>
         <button onClick={() => markUsed(item.id)} style={{ ...btnBase, background: '#e8f5e9', color: '#388e3c' }}>✅ Used all</button>
-        <button onClick={() => markDiscarded(item.id)} style={{ ...btnBase, background: '#fff0f0', color: '#ff4444' }}>🗑️ Discard</button>
+        <button onClick={() => markDiscarded(item.id)} style={{ ...btnBase, background: '#fff0f0', color: '#e05050' }}>🗑️ Wasted</button>
+        <button onClick={() => setRemoveConfirmId(item.id)} style={{ ...btnBase, background: '#f5f5f5', color: '#aaa' }}>✕ Remove</button>
         <button onClick={() => {
           setEditingItem({
             id: item.id,
@@ -1057,6 +1082,18 @@ export default function InventoryPage() {
               )}
             </div>
           </div>
+        )}
+
+        {/* ── Expired banner ── */}
+        {expiredCount > 0 && (
+          <button onClick={() => setFilter('expired')} style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%', background: 'linear-gradient(135deg,#fff0f0,#ffe8e8)', border: '2px solid rgba(255,68,68,0.3)', borderRadius: '14px', padding: '12px 16px', marginBottom: '8px', cursor: 'pointer', textAlign: 'left', boxShadow: '0 2px 10px rgba(255,68,68,0.1)' }}>
+            <span style={{ fontSize: '24px' }}>⚠️</span>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff4444' }}>{expiredCount} item{expiredCount > 1 ? 's' : ''} have expired</span>
+              <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff8080', margin: 0 }}>Tap to see only expired items · or scroll to find them in All</p>
+            </div>
+            <span style={{ background: '#ff4444', color: 'white', fontFamily: "'Fredoka One',cursive", fontSize: '16px', borderRadius: '50px', width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{expiredCount}</span>
+          </button>
         )}
 
         {/* ── Expiring banner ── */}
@@ -1355,7 +1392,7 @@ export default function InventoryPage() {
             disabled={selectedIds.size === 0}
             style={{ ...btnBase, background: selectedIds.size > 0 ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : '#f5f5f5', color: selectedIds.size > 0 ? 'white' : '#ccc', boxShadow: selectedIds.size > 0 ? '0 4px 12px rgba(255,68,68,0.3)' : 'none', padding: '10px 16px' }}
           >
-            🗑️ Discard
+            🗑️ Wasted
           </button>
           <button
             onClick={() => { setSelectMode(false); setSelectedIds(new Set()) }}

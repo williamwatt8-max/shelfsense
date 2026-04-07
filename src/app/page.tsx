@@ -63,10 +63,11 @@ export default function Home() {
     return `${fmt(rem)} ${item.unit}`
   }
 
-  const expiringSoon  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d <= 7 })
-  const openedItems   = items.filter(i => i.opened_at && !expiringSoon.some(e => e.id === i.id)).slice(0, 4)
+  const expiredItems  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d < 0 })
+  const expiringSoon  = items.filter(i => { const d = daysLeft(i.expiry_date); return d !== null && d >= 0 && d <= 7 })
+  const expirySectionItems = [...expiredItems, ...expiringSoon]
+  const openedItems   = items.filter(i => i.opened_at && !expirySectionItems.some(e => e.id === i.id)).slice(0, 4)
   const totalItems    = items.length
-  const expiringCount = expiringSoon.length
 
   const quickActions = [
     { href: '/add',           emoji: '➕', label: 'Add Item',    desc: 'Manual, voice or barcode' },
@@ -97,7 +98,7 @@ export default function Home() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '20px' }}>
             {[
               { label: 'In pantry', value: totalItems, color: '#ff7043' },
-              { label: 'Expiring soon', value: expiringCount, color: expiringCount > 0 ? '#ff9800' : '#4caf50' },
+              { label: 'Expiring soon', value: expiringSoon.length + expiredItems.length, color: expiredItems.length > 0 ? '#ff4444' : expiringSoon.length > 0 ? '#ff9800' : '#4caf50' },
               { label: 'To buy', value: shoppingCount, color: '#1e88e5' },
             ].map(({ label, value, color }) => (
               <div key={label} style={{ background: 'white', borderRadius: '14px', padding: '14px 12px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', textAlign: 'center' }}>
@@ -124,18 +125,20 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Expiring soon */}
-        {!loading && expiringSoon.length > 0 && (
+        {/* Expiring / Expired */}
+        {!loading && (expiredItems.length > 0 || expiringSoon.length > 0) && (
           <div style={{ background: 'white', borderRadius: '16px', padding: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-              <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#ff7043', margin: 0 }}>⏰ Expiring Soon</p>
-              <a href="/inventory" style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff7043', textDecoration: 'none' }}>See all →</a>
+              <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: expiredItems.length > 0 ? '#ff4444' : '#ff7043', margin: 0 }}>
+                {expiredItems.length > 0 ? '⚠️ Needs Attention' : '⏰ Expiring Soon'}
+              </p>
+              <a href="/inventory" style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff7043', textDecoration: 'none' }}>Act now →</a>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {expiringSoon.slice(0, 6).map(item => {
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+              {expiredItems.slice(0, 3).map(item => {
                 const d = daysLeft(item.expiry_date)
                 return (
-                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f5f5f5' }}>
+                  <a key={item.id} href="/inventory" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f5f5f5', textDecoration: 'none' }}>
                     <div>
                       <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
                       <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', marginLeft: '8px' }}>{fmtQty(item)}</span>
@@ -143,7 +146,21 @@ export default function Home() {
                     <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '3px 10px', borderRadius: '50px', flexShrink: 0 }}>
                       {expiryLabel(d)}
                     </span>
-                  </div>
+                  </a>
+                )
+              })}
+              {expiringSoon.slice(0, expiredItems.length > 0 ? 3 : 6).map(item => {
+                const d = daysLeft(item.expiry_date)
+                return (
+                  <a key={item.id} href="/inventory" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f5f5f5', textDecoration: 'none' }}>
+                    <div>
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', textTransform: 'capitalize' }}>{item.name}</span>
+                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', marginLeft: '8px' }}>{fmtQty(item)}</span>
+                    </div>
+                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: expiryColor(d), background: `${expiryColor(d)}18`, padding: '3px 10px', borderRadius: '50px', flexShrink: 0 }}>
+                      {expiryLabel(d)}
+                    </span>
+                  </a>
                 )
               })}
             </div>

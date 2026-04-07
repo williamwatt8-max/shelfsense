@@ -1,6 +1,6 @@
 export type InventoryStatus   = 'active' | 'used' | 'discarded' | 'expired' | 'removed'
 export type StorageLocation   = 'fridge' | 'freezer' | 'cupboard' | 'other' | 'household'
-export type EventType         = 'added' | 'used' | 'used_some' | 'moved' | 'discarded' | 'expired' | 'opened'
+export type EventType         = 'added' | 'used' | 'used_some' | 'moved' | 'discarded' | 'expired' | 'opened' | 'removed'
 export type InventorySource   = 'receipt' | 'manual' | 'barcode' | 'voice'
 
 // How a receipt entered ShelfSense
