@@ -1056,27 +1056,26 @@ export default function AddPage() {
           <>
             {/* ── Voice capture (standalone — reachable via ?mode=voice URL param) ── */}
             {mode === 'voice' && (
-              <div style={{ background: 'white', borderRadius: '16px', padding: '24px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)', textAlign: 'center' }}>
-                <div style={{ fontSize: '48px', marginBottom: '8px' }}>🎤</div>
-                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '22px', color: '#2d2d2d', margin: '0 0 6px' }}>
-                  {voiceListening ? 'Recording…' : voiceProcessing ? 'Understanding…' : 'Voice Add'}
+              <div style={{ background: 'white', borderRadius: '16px', padding: '24px 20px', boxShadow: '0 4px 16px rgba(0,0,0,0.07)' }}>
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '20px', color: '#2d2d2d', margin: '0 0 6px' }}>
+                  {voiceListening ? 'Recording…' : voiceProcessing ? 'Understanding…' : 'Speak your items'}
                 </p>
                 <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#bbb', margin: '0 0 20px', lineHeight: 1.5 }}>
-                  {voiceListening ? 'Speak your items, then tap Stop when done' : 'Say one or more items, then tap Stop. e.g. "6 cans of Coke, milk 2 litres expiring Friday"'}
+                  {voiceListening ? 'Describe your items, then tap Stop when done.' : 'e.g. "6 cans of Coke, milk 2 litres expiring Friday"'}
                 </p>
                 {!voiceListening && !voiceProcessing && (
-                  <button onClick={startVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px' }}>
-                    <span style={{ fontSize: '20px' }}>🎤</span> Tap to speak
+                  <button onClick={startVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '15px', padding: '13px 28px', boxShadow: '0 6px 20px rgba(255,112,67,0.4)', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                    🎤 Start recording
                   </button>
                 )}
                 {voiceListening && (
-                  <button onClick={stopVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '16px', padding: '14px 32px', boxShadow: '0 6px 20px rgba(255,68,68,0.4)', display: 'inline-flex', alignItems: 'center', gap: '10px', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>
-                    <span style={{ fontSize: '20px' }}>🔴</span> Stop Recording
+                  <button onClick={stopVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '15px', padding: '13px 28px', boxShadow: '0 6px 20px rgba(255,68,68,0.4)', display: 'inline-flex', alignItems: 'center', gap: '8px', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>
+                    ⏹ Stop recording
                   </button>
                 )}
                 {voiceProcessing && <div style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', color: '#ff7043', marginTop: '4px' }}>Parsing items…</div>}
                 {voiceTranscript && !voiceListening && !voiceProcessing && (
-                  <div style={{ marginTop: '16px', background: '#f9f9f9', borderRadius: '10px', padding: '10px 14px', textAlign: 'left' }}>
+                  <div style={{ marginTop: '16px', background: '#f9f9f9', borderRadius: '10px', padding: '10px 14px' }}>
                     <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '0 0 4px' }}>You said:</p>
                     <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
                   </div>
@@ -1085,46 +1084,30 @@ export default function AddPage() {
               </div>
             )}
 
-            {/* ── Manual capture (includes inline voice shortcut) ── */}
+            {/* ── Manual capture (form + voice shortcut) ── */}
             {mode === 'manual' && (
               <>
-                {/* Compact voice section */}
-                <div style={{ background: 'white', borderRadius: '16px', padding: '16px 20px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '16px', color: '#2d2d2d', margin: 0 }}>🎤 Voice input</p>
-                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '2px 0 0' }}>
-                        {voiceListening ? 'Listening — tap Stop when done' : voiceProcessing ? 'Understanding your items…' : 'Describe items and they\'ll be added'}
-                      </p>
-                    </div>
-                    {!voiceListening && !voiceProcessing && (
-                      <button onClick={startVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '14px', padding: '9px 18px', boxShadow: '0 4px 12px rgba(255,112,67,0.35)', flexShrink: 0 }}>
-                        🎤 Speak
-                      </button>
-                    )}
-                    {voiceListening && (
-                      <button onClick={stopVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '14px', padding: '9px 18px', boxShadow: '0 4px 12px rgba(255,68,68,0.3)', animation: 'voice-pulse 0.9s ease-in-out infinite', flexShrink: 0 }}>
-                        🔴 Stop
-                      </button>
-                    )}
-                    {voiceProcessing && (
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043', flexShrink: 0 }}>Parsing…</span>
-                    )}
-                  </div>
-                  {voiceTranscript && !voiceListening && !voiceProcessing && (
-                    <div style={{ marginTop: '10px', background: '#f9f9f9', borderRadius: '10px', padding: '8px 12px' }}>
-                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '0 0 2px' }}>You said:</p>
-                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', margin: 0 }}>"{voiceTranscript}"</p>
-                    </div>
+                {/* Voice shortcut row — sits above the form, no competing card */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                  {!voiceListening && !voiceProcessing && (
+                    <button onClick={startVoice} style={{ ...btnBase, background: 'white', color: '#888', border: '1.5px solid #eee', fontSize: '13px', padding: '8px 14px', boxShadow: '0 2px 6px rgba(0,0,0,0.06)' }}>
+                      🎤 Add by voice instead
+                    </button>
                   )}
-                  {voiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff4444', margin: '8px 0 0' }}>😕 {voiceError}</p>}
-                </div>
-
-                {/* Divider */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-                  <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
-                  <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ccc', whiteSpace: 'nowrap' }}>or fill in the form</span>
-                  <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
+                  {voiceListening && (
+                    <button onClick={stopVoice} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff4444,#ff6b6b)', color: 'white', fontSize: '13px', padding: '8px 14px', boxShadow: '0 4px 12px rgba(255,68,68,0.3)', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>
+                      ⏹ Stop recording
+                    </button>
+                  )}
+                  {voiceProcessing && (
+                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043' }}>Parsing items…</span>
+                  )}
+                  {voiceListening && voiceTranscript && (
+                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', fontStyle: 'italic' }}>"{voiceTranscript}"</span>
+                  )}
+                  {voiceError && !voiceListening && !voiceProcessing && (
+                    <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff4444' }}>😕 {voiceError}</span>
+                  )}
                 </div>
 
                 {itemFormJSX}
@@ -1361,9 +1344,8 @@ export default function AddPage() {
               <div style={{ marginBottom: '16px' }}>
                 {!voiceExpiryOpen ? (
                   <button onClick={() => setVoiceExpiryOpen(true)}
-                    style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '8px', background: 'white', color: '#aaa', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: '10px 16px', fontSize: '13px' }}>
-                    <span>🎤</span>
-                    <span>Add expiry dates by voice</span>
+                    style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '8px', background: 'white', color: '#888', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: '10px 16px', fontSize: '13px', border: '1.5px solid #eee' }}>
+                    🎤 Set expiry dates by voice
                   </button>
                 ) : (
                   <div style={{ background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}>

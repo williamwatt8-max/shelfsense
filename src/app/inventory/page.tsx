@@ -873,10 +873,9 @@ export default function InventoryPage() {
             <button
               onClick={startVoiceListening}
               disabled={voiceListening || voiceProcessing || selectMode}
-              title="Voice command"
-              style={{ width: '44px', height: '44px', borderRadius: '50%', border: 'none', background: voiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '20px', cursor: voiceListening || voiceProcessing || selectMode ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: voiceListening ? '0 4px 16px rgba(255,68,68,0.55)' : '0 4px 16px rgba(255,112,67,0.4)', animation: voiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none', flexShrink: 0, opacity: voiceProcessing || selectMode ? 0.5 : 1 }}
+              style={{ ...btnBase, background: voiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'white', color: voiceListening ? 'white' : '#888', boxShadow: voiceListening ? '0 4px 12px rgba(255,68,68,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', padding: '10px 14px', fontSize: '14px', animation: voiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none', opacity: voiceProcessing || selectMode ? 0.45 : 1 }}
             >
-              🎤
+              {voiceListening ? '⏹ Stop' : '🎤 Voice'}
             </button>
             <button onClick={() => { setSelectMode(!selectMode); setSelectedIds(new Set()); setExpandedId(null) }} style={{ ...btnBase, background: selectMode ? 'linear-gradient(135deg,#ff7043,#ff9a3c)' : 'white', color: selectMode ? 'white' : '#888', boxShadow: selectMode ? '0 4px 12px rgba(255,112,67,0.4)' : '0 2px 8px rgba(0,0,0,0.08)', padding: '10px 16px', fontSize: '14px' }}>
               ☑ Select
@@ -1039,10 +1038,9 @@ export default function InventoryPage() {
           <div style={{ background: 'white', borderRadius: '16px', padding: '16px 18px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.09)', border: '1.5px solid rgba(255,112,67,0.2)' }}>
             {voiceListening && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span style={{ fontSize: '22px', display: 'inline-block', animation: 'voice-pulse 0.9s ease-in-out infinite' }}>🎤</span>
-                <div>
+                <div style={{ flex: 1 }}>
                   <span style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#ff4444' }}>
-                    {voiceTranscript ? 'Got it...' : 'Listening — say something'}
+                    {voiceTranscript ? 'Got it — say more or tap Stop' : 'Listening — say something like "used the milk"'}
                   </span>
                   {voiceTranscript && (
                     <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#bbb', margin: '2px 0 0' }}>"{voiceTranscript}"</p>
