@@ -129,6 +129,7 @@ export default function AddPage() {
   const [rVoiceFilled,      setRVoiceFilled]      = useState<{ name: string; date: string }[]>([])
   const [rVoiceError,       setRVoiceError]       = useState<string | null>(null)
   const [rVoiceTranscript,  setRVoiceTranscript]  = useState<string>('')
+  const [voiceExpiryOpen,   setVoiceExpiryOpen]   = useState(false)
   const receiptFileRef = useRef<HTMLInputElement>(null)
   const [matchSuggestions, setMatchSuggestions] = useState<MatchSuggestion[]>([])
 
@@ -1355,46 +1356,58 @@ export default function AddPage() {
               </button>
             </div>
 
-            {/* Voice expiry button (for receipt items) */}
+            {/* Voice expiry — collapsible */}
             {reviewBatch.some(i => i.source === 'receipt' && !i.absorbed) && (
-              <div style={{ marginBottom: '16px', background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}>
-                {/* Numbered items list */}
-                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>Set expiry dates by voice</p>
-                <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  {reviewBatch.filter(i => i.source === 'receipt' && !i.absorbed).map((item, idx) => (
-                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
-                      <span style={{ color: item.expiryDate ? '#4caf50' : '#ddd', fontSize: '15px', width: '18px', flexShrink: 0, textAlign: 'center' }}>
-                        {item.expiryDate ? '✓' : '○'}
-                      </span>
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043' }}>{idx + 1}.</span>
-                      <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: item.expiryDate ? '#388e3c' : '#555', flex: 1 }}>
-                        {item.name}
-                      </span>
-                      {item.expiryDate
-                        ? <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#4caf50', flexShrink: 0 }}>
-                            {new Date(item.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
-                          </span>
-                        : <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#ddd', flexShrink: 0 }}>—</span>
-                      }
+              <div style={{ marginBottom: '16px' }}>
+                {!voiceExpiryOpen ? (
+                  <button onClick={() => setVoiceExpiryOpen(true)}
+                    style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '8px', background: 'white', color: '#aaa', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: '10px 16px', fontSize: '13px' }}>
+                    <span>🎤</span>
+                    <span>Add expiry dates by voice</span>
+                  </button>
+                ) : (
+                  <div style={{ background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: 0 }}>Add expiry dates by voice</p>
+                      <button onClick={() => setVoiceExpiryOpen(false)} style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '16px', cursor: 'pointer', padding: '2px', lineHeight: 1 }}>✕</button>
                     </div>
-                  ))}
-                </div>
-                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '12px', color: '#bbb', margin: '0 0 10px' }}>
-                  Say e.g. "1 tomorrow, 3 Sunday, 5 next week"
-                </p>
-                <button onClick={startReceiptVoiceExpiry} disabled={rVoiceListening || rVoiceProcessing}
-                  style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '10px', background: rVoiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 16px rgba(255,112,67,0.35)', opacity: rVoiceProcessing ? 0.7 : 1 }}>
-                  <span style={{ fontSize: '18px', animation: rVoiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
-                  {rVoiceListening ? 'Listening...' : rVoiceProcessing ? 'Understanding...' : 'Speak expiry dates'}
-                </button>
-                {rVoiceListening && rVoiceTranscript && (
-                  <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '6px 0 0', fontStyle: 'italic' }}>"{rVoiceTranscript}"</p>
-                )}
-                {rVoiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '8px 0 0' }}>😕 {rVoiceError}</p>}
-                {rVoiceFilled.length > 0 && (
-                  <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '10px', padding: '8px 12px', marginTop: '10px' }}>
-                    <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#388e3c', margin: '0 0 4px' }}>✅ {rVoiceFilled.length} date{rVoiceFilled.length !== 1 ? 's' : ''} filled in</p>
-                    {rVoiceFilled.map((f, i) => <p key={i} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#555', margin: '2px 0' }}>{f.name} → {new Date(f.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p>)}
+                    <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {reviewBatch.filter(i => i.source === 'receipt' && !i.absorbed).map((item, idx) => (
+                        <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0' }}>
+                          <span style={{ color: item.expiryDate ? '#4caf50' : '#ddd', fontSize: '14px', width: '16px', flexShrink: 0, textAlign: 'center' }}>
+                            {item.expiryDate ? '✓' : '○'}
+                          </span>
+                          <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff7043' }}>{idx + 1}.</span>
+                          <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: item.expiryDate ? '#388e3c' : '#555', flex: 1 }}>
+                            {item.name}
+                          </span>
+                          {item.expiryDate
+                            ? <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', color: '#4caf50', flexShrink: 0 }}>
+                                {new Date(item.expiryDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                              </span>
+                            : <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#ddd', flexShrink: 0 }}>—</span>
+                          }
+                        </div>
+                      ))}
+                    </div>
+                    <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 600, fontSize: '11px', color: '#bbb', margin: '0 0 10px' }}>
+                      e.g. "1 tomorrow, 3 Sunday, 5 next week"
+                    </p>
+                    <button onClick={startReceiptVoiceExpiry} disabled={rVoiceListening || rVoiceProcessing}
+                      style={{ ...btnBase, display: 'flex', alignItems: 'center', gap: '10px', background: rVoiceListening ? 'linear-gradient(135deg,#ff4444,#ff6b6b)' : 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 16px rgba(255,112,67,0.35)', opacity: rVoiceProcessing ? 0.7 : 1 }}>
+                      <span style={{ fontSize: '18px', animation: rVoiceListening ? 'voice-pulse 0.9s ease-in-out infinite' : 'none' }}>🎤</span>
+                      {rVoiceListening ? 'Listening...' : rVoiceProcessing ? 'Understanding...' : 'Speak expiry dates'}
+                    </button>
+                    {rVoiceListening && rVoiceTranscript && (
+                      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#bbb', margin: '6px 0 0', fontStyle: 'italic' }}>"{rVoiceTranscript}"</p>
+                    )}
+                    {rVoiceError && <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff4444', margin: '8px 0 0' }}>😕 {rVoiceError}</p>}
+                    {rVoiceFilled.length > 0 && (
+                      <div style={{ background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '10px', padding: '8px 12px', marginTop: '10px' }}>
+                        <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '14px', color: '#388e3c', margin: '0 0 4px' }}>✅ {rVoiceFilled.length} date{rVoiceFilled.length !== 1 ? 's' : ''} set</p>
+                        {rVoiceFilled.map((f, i) => <p key={i} style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#555', margin: '2px 0' }}>{f.name} → {new Date(f.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p>)}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1442,14 +1455,19 @@ export default function AddPage() {
               </div>
             )}
 
-            {/* Review item cards */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
-              {reviewBatch.map((item, index) => item.absorbed ? null : (
-                <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: needsReview(item) ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent' }}>
+            {/* Review item cards — two sections */}
+            {(() => {
+              const visibleItems = reviewBatch
+                .map((item, index) => ({ item, index }))
+                .filter(({ item }) => !item.absorbed)
+              const needsCheckGroup = visibleItems.filter(({ item }) => needsReview(item))
+              const readyGroup      = visibleItems.filter(({ item }) => !needsReview(item))
 
+              const renderCard = (item: ReviewBatchItem, index: number) => (
+                <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: needsReview(item) ? '2px solid rgba(255,179,71,0.55)' : '2px solid transparent' }}>
                   {isItemExpanded(item) ? (
                     <>
-                      {/* Row 1: source icon / checkbox + name + collapse + remove */}
+                      {/* Row 1: source icon / checkbox + name + badges + collapse + remove */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
                         {item.source === 'receipt' ? (
                           <input type="checkbox" checked={item.selected} onChange={e => updateReviewItem(index, { selected: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ff7043', flexShrink: 0, cursor: 'pointer' }} />
@@ -1464,18 +1482,16 @@ export default function AddPage() {
                           onChange={e => updateReviewItem(index, { name: e.target.value })}
                           style={{ flex: 1, border: '2px solid #eee', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', minWidth: 0 }} />
                         {item.isKnown && (
-                          <span style={{ background: 'rgba(255,193,7,0.15)', color: '#e6a817', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⭐ known</span>
+                          <span style={{ background: 'rgba(76,175,80,0.12)', color: '#4caf50', fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>✓ known</span>
                         )}
                         {item.confidence != null && item.confidence < 0.8 && (
                           <span style={{ background: 'rgba(255,179,71,0.15)', color: '#e08000', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⚠ check</span>
                         )}
-                        {/* Collapse button — only for receipt items that don't need review */}
                         {item.source === 'receipt' && !needsReview(item) && (
-                          <button onClick={() => toggleItemExpanded(item.id)} style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '14px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }} title="Collapse">▲</button>
+                          <button onClick={() => toggleItemExpanded(item.id)} style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '13px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }} title="Collapse">▲</button>
                         )}
                         <button onClick={() => removeReviewItem(index)} style={{ background: 'none', border: 'none', color: '#ddd', fontSize: '16px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }}>✕</button>
                       </div>
-
                       {/* Row 2: count × amount + unit + price */}
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1497,7 +1513,6 @@ export default function AddPage() {
                             style={{ ...smallField, width: '68px', textAlign: 'right', color: '#ff7043' }} />
                         </div>
                       </div>
-
                       {/* Row 3: location + category */}
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: item.location !== 'household' ? '8px' : '0' }}>
                         <select value={item.location} onChange={e => updateReviewItem(index, { location: e.target.value as StorageLocation })} style={{ ...smallField, flex: 1 }}>
@@ -1508,7 +1523,6 @@ export default function AddPage() {
                           {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                       </div>
-
                       {/* Row 4: expiry */}
                       {item.location !== 'household' && (
                         <input type="date" value={item.expiryDate}
@@ -1517,21 +1531,53 @@ export default function AddPage() {
                       )}
                     </>
                   ) : (
-                    /* Collapsed view — high-confidence receipt items */
+                    /* Collapsed row — high-confidence receipt items */
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                       <input type="checkbox" checked={item.selected} onChange={e => updateReviewItem(index, { selected: e.target.checked })} style={{ width: '18px', height: '18px', accentColor: '#ff7043', flexShrink: 0, cursor: 'pointer' }} />
                       <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', color: '#2d2d2d', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+                      {item.isKnown && (
+                        <span style={{ background: 'rgba(76,175,80,0.12)', color: '#4caf50', fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>✓</span>
+                      )}
                       {item.price != null && (
                         <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#ff7043', flexShrink: 0 }}>£{item.price.toFixed(2)}</span>
                       )}
-                      <span style={{ color: '#4caf50', fontSize: '14px', flexShrink: 0 }}>✓</span>
-                      <button onClick={() => toggleItemExpanded(item.id)} style={{ background: 'none', border: 'none', color: '#bbb', fontSize: '14px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }} title="Edit">✏️</button>
+                      <span style={{ color: '#4caf50', fontSize: '13px', flexShrink: 0 }}>✓</span>
+                      <button onClick={() => toggleItemExpanded(item.id)} style={{ background: 'none', border: 'none', color: '#bbb', fontSize: '13px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }} title="Edit">✏️</button>
                       <button onClick={() => removeReviewItem(index)} style={{ background: 'none', border: 'none', color: '#ddd', fontSize: '16px', cursor: 'pointer', flexShrink: 0, padding: '4px', lineHeight: 1 }}>✕</button>
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
+              )
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
+                  {/* Section A: needs a check */}
+                  {needsCheckGroup.length > 0 && (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '2px 0' }}>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: '11px', color: '#e08000', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                          ⚠ {needsCheckGroup.length} need{needsCheckGroup.length === 1 ? 's' : ''} a check
+                        </span>
+                        <div style={{ flex: 1, height: '1px', background: 'rgba(255,179,71,0.3)' }} />
+                      </div>
+                      {needsCheckGroup.map(({ item, index }) => renderCard(item, index))}
+                    </>
+                  )}
+                  {/* Section B: ready to save */}
+                  {readyGroup.length > 0 && (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: needsCheckGroup.length > 0 ? '6px 0 2px' : '2px 0' }}>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 800, fontSize: '11px', color: '#4caf50', textTransform: 'uppercase', letterSpacing: '0.6px' }}>
+                          ✓ {readyGroup.length} ready
+                        </span>
+                        <div style={{ flex: 1, height: '1px', background: 'rgba(76,175,80,0.2)' }} />
+                      </div>
+                      {readyGroup.map(({ item, index }) => renderCard(item, index))}
+                    </>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Save button */}
             {reviewBatch.length === 0 ? (

@@ -931,9 +931,9 @@ export default function InventoryPage() {
           <h3 style={{ fontFamily: "'Fredoka One',cursive", fontSize: '17px', color: '#2d2d2d', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {name}
           </h3>
-          {isFavourite && <span title="Favourite product" style={{ fontSize: '12px', lineHeight: 1, flexShrink: 0 }}>⭐</span>}
+          {isFavourite && <span title="Favourite — ShelfSense knows this product" style={{ background: 'rgba(255,193,7,0.15)', color: '#e6a817', fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>⭐ fav</span>}
           {isKnown && !isFavourite && (
-            <span title="Known barcode product" style={{ width: '15px', height: '15px', borderRadius: '50%', background: 'rgba(76,175,80,0.18)', color: '#4caf50', fontSize: '9px', fontWeight: 900, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: "'Nunito',sans-serif" }}>✓</span>
+            <span title="ShelfSense knows this product" style={{ background: 'rgba(76,175,80,0.12)', color: '#4caf50', fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>✓ known</span>
           )}
           {location === 'household' && (
             <span style={{ background: 'rgba(100,120,240,0.1)', color: '#6478f0', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '50px', fontFamily: "'Nunito',sans-serif", flexShrink: 0 }}>🏠</span>
@@ -958,7 +958,7 @@ export default function InventoryPage() {
             ? <><span>·</span><span style={{ color: '#d4a96e' }}>£{price.toFixed(2)}</span></>
             : <><span>·</span><span style={{ color: '#e0e0e0' }}>no price</span></>}
           {!hasExpiry && location !== 'household' && (
-            <><span>·</span><span style={{ color: '#e6c47a' }}>no expiry</span></>
+            <><span>·</span><span style={{ background: 'rgba(230,165,0,0.12)', color: '#c9880a', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '50px' }}>no expiry</span></>
           )}
         </p>
       </div>
@@ -1229,8 +1229,13 @@ export default function InventoryPage() {
                   const hasBatches = group.batches.length > 1
                   const repBatch = group.batches[0]
                   const openedAt = !hasBatches ? repBatch.opened_at : null
+                  const urgencyBorder = !selectMode && group.location !== 'household'
+                    ? (d !== null && d < 0 ? '1.5px solid rgba(255,68,68,0.35)'
+                      : d !== null && d <= 3 ? '1.5px solid rgba(255,112,67,0.3)'
+                      : cardBorder(group.location))
+                    : (selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location))
                   return (
-                    <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && isGroupSelected(group) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(group.location) }}>
+                    <div key={group.name} className="item-row" style={{ background: selectMode && isGroupSelected(group) ? '#fff5f0' : cardBg(group.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: urgencyBorder }}>
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
                         <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} source={!hasBatches ? repBatch.source : undefined} barcode={!hasBatches ? repBatch.barcode : undefined} isKnown={!hasBatches && !!repBatch.barcode && knownByBarcode.has(repBatch.barcode!)} isFavourite={!hasBatches && !!repBatch.barcode && (knownByBarcode.get(repBatch.barcode!)?.is_favourite ?? false)} hasExpiry={!hasBatches ? !!repBatch.expiry_date : !!group.nearestExpiry} />
@@ -1292,8 +1297,13 @@ export default function InventoryPage() {
                 {sorted.map((item) => {
                   const d = daysLeft(item.expiry_date)
                   const isExpanded = expandedId === item.id
+                  const itemUrgencyBorder = !selectMode && item.location !== 'household'
+                    ? (d !== null && d < 0 ? '1.5px solid rgba(255,68,68,0.35)'
+                      : d !== null && d <= 3 ? '1.5px solid rgba(255,112,67,0.3)'
+                      : cardBorder(item.location))
+                    : (selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location))
                   return (
-                    <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: selectMode && selectedIds.has(item.id) ? '2px solid rgba(255,112,67,0.3)' : cardBorder(item.location) }}>
+                    <div key={item.id} className="item-row" style={{ background: selectMode && selectedIds.has(item.id) ? '#fff5f0' : cardBg(item.location), borderRadius: '14px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', overflow: 'hidden', border: itemUrgencyBorder }}>
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
                         <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} source={item.source} barcode={item.barcode} isKnown={!!item.barcode && knownByBarcode.has(item.barcode)} isFavourite={!!item.barcode && (knownByBarcode.get(item.barcode)?.is_favourite ?? false)} hasExpiry={!!item.expiry_date} />
