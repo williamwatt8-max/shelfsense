@@ -34,6 +34,17 @@ type ReviewBatchItem = {
   isKnown?: boolean
   // receipt-specific
   confidence?: number
+  // matching
+  absorbed?: boolean
+  matchedToId?: string
+}
+
+type MatchSuggestion = {
+  id: string
+  receiptItemId: string
+  barcodeItemId: string
+  confidence: number
+  status: 'pending' | 'accepted' | 'rejected'
 }
 
 // ── Manual / voice single-item form ──────────────────────────────────────────
@@ -114,6 +125,7 @@ export default function AddPage() {
   const [rVoiceError,      setRVoiceError]      = useState<string | null>(null)
   const [rVoiceTranscript, setRVoiceTranscript] = useState<string>('')
   const receiptFileRef = useRef<HTMLInputElement>(null)
+  const [matchSuggestions, setMatchSuggestions] = useState<MatchSuggestion[]>([])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -164,6 +176,7 @@ export default function AddPage() {
     setVoiceFilled(false)
     setVoiceTranscript('')
     setAddedName(null)
+    setMatchSuggestions([])
   }
 
   // ── Form helpers ──────────────────────────────────────────────────────────
@@ -342,6 +355,67 @@ export default function AddPage() {
     }
   }
 
+  // ── Receipt + barcode matching ────────────────────────────────────────────
+
+  function tokenSimilarity(a: string, b: string): number {
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim()
+    const na = norm(a), nb = norm(b)
+    if (na === nb) return 1
+    const ta = new Set(na.split(/\s+/).filter(t => t.length > 2))
+    const tb = new Set(nb.split(/\s+/).filter(t => t.length > 2))
+    if (ta.size === 0 || tb.size === 0) return (na.includes(nb) || nb.includes(na)) ? 0.5 : 0
+    const inter = [...ta].filter(t => tb.has(t)).length
+    return inter / new Set([...ta, ...tb]).size
+  }
+
+  function runAutoMatch(batch: ReviewBatchItem[]): { updatedBatch: ReviewBatchItem[]; suggestions: MatchSuggestion[] } {
+    const receiptItems = batch.filter(i => i.source === 'receipt' && !i.absorbed && !i.matchedToId)
+    const barcodeItems = batch.filter(i => i.source === 'barcode' && i.lookupStatus !== 'loading' && i.name !== i.barcode && !i.absorbed && !i.matchedToId)
+    if (receiptItems.length === 0 || barcodeItems.length === 0) return { updatedBatch: batch, suggestions: [] }
+    const suggestions: MatchSuggestion[] = []
+    const updatedBatch = [...batch]
+    const usedBarcodeIds = new Set<string>()
+    for (const rItem of receiptItems) {
+      let bestScore = 0, bestBarcodeItem: ReviewBatchItem | null = null
+      for (const bItem of barcodeItems) {
+        if (usedBarcodeIds.has(bItem.id)) continue
+        let score = tokenSimilarity(bItem.name, rItem.name)
+        if (bItem.category && rItem.category && bItem.category === rItem.category) score = Math.min(1, score + 0.15)
+        if (score > bestScore) { bestScore = score; bestBarcodeItem = bItem }
+      }
+      if (!bestBarcodeItem || bestScore < 0.3) continue
+      if (bestScore >= 0.75) {
+        const bIdx = updatedBatch.findIndex(i => i.id === bestBarcodeItem!.id)
+        if (bIdx !== -1) updatedBatch[bIdx] = { ...updatedBatch[bIdx], price: rItem.price ?? updatedBatch[bIdx].price, retailer: rItem.retailer || updatedBatch[bIdx].retailer, matchedToId: rItem.id }
+        const rIdx = updatedBatch.findIndex(i => i.id === rItem.id)
+        if (rIdx !== -1) updatedBatch[rIdx] = { ...updatedBatch[rIdx], absorbed: true, matchedToId: bestBarcodeItem.id }
+        usedBarcodeIds.add(bestBarcodeItem.id)
+      } else {
+        suggestions.push({ id: `match-${rItem.id}-${bestBarcodeItem.id}`, receiptItemId: rItem.id, barcodeItemId: bestBarcodeItem.id, confidence: bestScore, status: 'pending' })
+        usedBarcodeIds.add(bestBarcodeItem.id)
+      }
+    }
+    return { updatedBatch, suggestions }
+  }
+
+  function acceptSuggestion(suggId: string) {
+    const sugg = matchSuggestions.find(s => s.id === suggId)
+    if (!sugg) return
+    setReviewBatch(prev => {
+      const rItem = prev.find(i => i.id === sugg.receiptItemId)
+      return prev.map(item => {
+        if (item.id === sugg.barcodeItemId) return { ...item, price: rItem?.price ?? item.price, retailer: rItem?.retailer || item.retailer, matchedToId: sugg.receiptItemId }
+        if (item.id === sugg.receiptItemId) return { ...item, absorbed: true, matchedToId: sugg.barcodeItemId }
+        return item
+      })
+    })
+    setMatchSuggestions(prev => prev.map(s => s.id === suggId ? { ...s, status: 'accepted' } : s))
+  }
+
+  function rejectSuggestion(suggId: string) {
+    setMatchSuggestions(prev => prev.map(s => s.id === suggId ? { ...s, status: 'rejected' } : s))
+  }
+
   function stopCamera() {
     try { zxingControlsRef.current?.stop() } catch {}
     zxingControlsRef.current = null
@@ -435,7 +509,13 @@ export default function AddPage() {
     stopCamera()
     setBarcodeScanning(false)
     if (barcodeBatch.length > 0) {
-      setReviewBatch(prev => [...prev, ...barcodeBatch])
+      const snap = barcodeBatch
+      setReviewBatch(prev => {
+        const merged = [...prev, ...snap]
+        const { updatedBatch, suggestions } = runAutoMatch(merged)
+        if (suggestions.length > 0) setMatchSuggestions(s => [...s, ...suggestions])
+        return updatedBatch
+      })
       setBarcodeBatch([])
       setStep('review')
     }
@@ -474,7 +554,13 @@ export default function AddPage() {
         openedAt: '',
         confidence: item.confidence,
       }))
-      setReviewBatch(prev => [...prev, ...items])
+      const newItems = items
+      setReviewBatch(prev => {
+        const merged = [...prev, ...newItems]
+        const { updatedBatch, suggestions } = runAutoMatch(merged)
+        if (suggestions.length > 0) setMatchSuggestions(s => [...s, ...suggestions])
+        return updatedBatch
+      })
       setStep('review')
     } catch { alert('Something went wrong. Try again.') }
     setReceiptLoading(false)
@@ -554,7 +640,7 @@ export default function AddPage() {
   // ── Unified save ──────────────────────────────────────────────────────────
 
   async function saveAll() {
-    const toSave = reviewBatch.filter(i => i.selected)
+    const toSave = reviewBatch.filter(i => i.selected && !i.absorbed)
     if (toSave.length === 0) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
@@ -1036,12 +1122,12 @@ export default function AddPage() {
             </div>
 
             {/* Voice expiry button (for receipt items) */}
-            {reviewBatch.some(i => i.source === 'receipt') && (
+            {reviewBatch.some(i => i.source === 'receipt' && !i.absorbed) && (
               <div style={{ marginBottom: '16px', background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)' }}>
                 {/* Numbered items list */}
                 <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>Set expiry dates by voice</p>
                 <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  {reviewBatch.filter(i => i.source === 'receipt').map((item, idx) => (
+                  {reviewBatch.filter(i => i.source === 'receipt' && !i.absorbed).map((item, idx) => (
                     <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
                       <span style={{ color: item.expiryDate ? '#4caf50' : '#ddd', fontSize: '15px', width: '18px', flexShrink: 0, textAlign: 'center' }}>
                         {item.expiryDate ? '✓' : '○'}
@@ -1080,9 +1166,51 @@ export default function AddPage() {
               </div>
             )}
 
+            {/* Match suggestions panel */}
+            {matchSuggestions.some(s => s.status === 'pending') && (
+              <div style={{ marginBottom: '16px', background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', border: '1.5px solid rgba(255,112,67,0.2)' }}>
+                <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#ff7043', margin: '0 0 4px' }}>🔗 Suggested matches</p>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#aaa', margin: '0 0 12px' }}>These receipt items may match your scanned products</p>
+                {matchSuggestions.filter(s => s.status === 'pending').map(sugg => {
+                  const rItem = reviewBatch.find(i => i.id === sugg.receiptItemId)
+                  const bItem = reviewBatch.find(i => i.id === sugg.barcodeItemId)
+                  if (!rItem || !bItem) return null
+                  return (
+                    <div key={sugg.id} style={{ background: '#fff8f0', borderRadius: '10px', padding: '10px 12px', marginBottom: '8px', border: '1.5px solid rgba(255,112,67,0.15)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '13px', flexShrink: 0 }}>🧾</span>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', flex: 1 }}>{rItem.name}</span>
+                        {rItem.price != null && <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#d4a96e', flexShrink: 0 }}>£{rItem.price.toFixed(2)}</span>}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                        <span style={{ fontSize: '13px', flexShrink: 0 }}>📷</span>
+                        <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#2d2d2d', flex: 1 }}>{bItem.name}</span>
+                        <span style={{ background: sugg.confidence >= 0.6 ? 'rgba(76,175,80,0.15)' : 'rgba(255,152,0,0.15)', color: sugg.confidence >= 0.6 ? '#388e3c' : '#e65100', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '11px', padding: '2px 8px', borderRadius: '50px', flexShrink: 0 }}>
+                          {Math.round(sugg.confidence * 100)}% match
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button onClick={() => acceptSuggestion(sugg.id)} style={{ ...btnBase, flex: 1, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', padding: '7px 12px', fontSize: '13px', boxShadow: '0 3px 10px rgba(76,175,80,0.3)' }}>✓ Yes, they match</button>
+                        <button onClick={() => rejectSuggestion(sugg.id)} style={{ ...btnBase, background: '#f0f0f0', color: '#888', padding: '7px 12px', fontSize: '13px' }}>Skip</button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Auto-matched summary */}
+            {reviewBatch.some(i => i.matchedToId && !i.absorbed && i.source === 'barcode') && (
+              <div style={{ marginBottom: '12px', background: '#f0fff4', border: '1.5px solid rgba(76,175,80,0.2)', borderRadius: '12px', padding: '10px 14px' }}>
+                <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#388e3c', margin: 0 }}>
+                  ✅ {reviewBatch.filter(i => i.matchedToId && !i.absorbed && i.source === 'barcode').length} item{reviewBatch.filter(i => i.matchedToId && !i.absorbed && i.source === 'barcode').length !== 1 ? 's' : ''} auto-matched — receipt price applied
+                </p>
+              </div>
+            )}
+
             {/* Review item cards */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
-              {reviewBatch.map((item, index) => (
+              {reviewBatch.map((item, index) => item.absorbed ? null : (
                 <div key={item.id} style={{ background: 'white', borderRadius: '14px', padding: '14px 16px', boxShadow: '0 2px 10px rgba(0,0,0,0.07)', border: (item.confidence != null && item.confidence < 0.8) || item.lookupStatus === 'not_found' || item.lookupStatus === 'error' ? '2px solid rgba(255,179,71,0.6)' : '2px solid transparent' }}>
 
                   {/* Row 1: source icon / checkbox + name + remove */}
@@ -1158,9 +1286,9 @@ export default function AddPage() {
                 <button onClick={goToChoose} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', padding: '12px 24px' }}>← Add items</button>
               </div>
             ) : (
-              <button onClick={saveAll} disabled={saving || reviewBatch.filter(i => i.selected).length === 0}
+              <button onClick={saveAll} disabled={saving || reviewBatch.filter(i => i.selected && !i.absorbed).length === 0}
                 style={{ ...btnBase, width: '100%', background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', fontSize: '18px', padding: '16px', boxShadow: '0 8px 24px rgba(255,112,67,0.4)', fontFamily: "'Fredoka One',cursive", opacity: saving ? 0.7 : 1 }}>
-                {saving ? 'Saving...' : `Save ${reviewBatch.filter(i => i.selected).length} Item${reviewBatch.filter(i => i.selected).length !== 1 ? 's' : ''} to Inventory`}
+                {saving ? 'Saving...' : `Save ${reviewBatch.filter(i => i.selected && !i.absorbed).length} Item${reviewBatch.filter(i => i.selected && !i.absorbed).length !== 1 ? 's' : ''} to Inventory`}
               </button>
             )}
           </>

@@ -33,8 +33,10 @@ type GroupedItem = {
   batches: InventoryItem[]
 }
 
-type UsingItemState  = { id: string; used: number; unit: string; maxQty: number }
-type OpeningItemState = { id: string; name: string; category: string | null; suggestedExpiry: string; rangeText: string; hasShelfLife: boolean }
+type UsingItemState = {
+  id: string; used: number; unit: string; maxQty: number
+  isFirstOpen: boolean; suggestedExpiry: string; rangeText: string; acceptExpiry: boolean
+}
 type EditingItemState = {
   id: string
   source: string
@@ -75,7 +77,6 @@ export default function InventoryPage() {
   const [editingItem, setEditingItem]   = useState<EditingItemState | null>(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [usingItem, setUsingItem]       = useState<UsingItemState | null>(null)
-  const [openingItem, setOpeningItem]   = useState<OpeningItemState | null>(null)
   const [selectMode, setSelectMode]     = useState<boolean>(false)
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
   const [retailerFilter, setRetailerFilter] = useState<string | null>(null)
@@ -83,6 +84,8 @@ export default function InventoryPage() {
   const [filterPanelOpen, setFilterPanelOpen] = useState(false)
   const [toast, setToast]               = useState<string | null>(null)
   const [fabOpen, setFabOpen]                   = useState(false)
+  const [quickExpiryId,   setQuickExpiryId]   = useState<string | null>(null)
+  const [quickExpiryDate, setQuickExpiryDate] = useState('')
 
   // ── Enrichment state (in edit modal) ──────────────────────────────────────
   const [enrichMode,           setEnrichMode]           = useState<EnrichMode>(null)
@@ -200,17 +203,27 @@ export default function InventoryPage() {
     const used = Math.max(0, usingItem.used)
     const remaining = parseFloat((usingItem.maxQty - used).toFixed(3))
     const today = new Date().toISOString().split('T')[0]
-    const item = items.find(i => i.id === usingItem.id)
-    const autoOpen = item && !item.opened_at
     if (remaining <= 0) {
       await supabase.from('inventory_items').update({ status: 'used' }).eq('id', usingItem.id)
       await supabase.from('inventory_events').insert({ inventory_item_id: usingItem.id, type: 'used', quantity_delta: -usingItem.maxQty })
     } else {
       const upd: Record<string, any> = { remaining_quantity: remaining, quantity: remaining }
-      if (autoOpen) upd.opened_at = today
+      if (usingItem.isFirstOpen) {
+        upd.opened_at = today
+        if (usingItem.acceptExpiry && usingItem.suggestedExpiry) upd.expiry_date = usingItem.suggestedExpiry
+      }
       await supabase.from('inventory_items').update(upd).eq('id', usingItem.id)
-      await supabase.from('inventory_events').insert({ inventory_item_id: usingItem.id, type: 'used_some', quantity_delta: -used })
+      const eventType = used === 0 ? 'opened' : 'used_some'
+      await supabase.from('inventory_events').insert({
+        inventory_item_id: usingItem.id, type: eventType,
+        quantity_delta: used === 0 ? null : -used,
+        notes: usingItem.isFirstOpen && usingItem.rangeText ? `Shelf life after opening: ${usingItem.rangeText}` : null,
+      })
     }
+    const msg = usingItem.isFirstOpen && used === 0
+      ? (usingItem.acceptExpiry && usingItem.suggestedExpiry ? '✅ Marked as opened — expiry updated!' : '✅ Marked as opened')
+      : used > 0 ? '✅ Recorded usage' : '✅ Done'
+    setToast(msg); setTimeout(() => setToast(null), 2500)
     setUsingItem(null)
     loadItems()
   }
@@ -434,48 +447,37 @@ export default function InventoryPage() {
       await supabase.from('inventory_items').update({ expiry_date: voiceAction.expiry_date }).eq('id', item.id)
       loadItems()
     } else if (voiceAction.action === 'mark_opened') {
-      startOpening(item)
+      startUseOpen(item)
     }
     setVoiceAction(null)
     setVoiceTranscript(null)
   }
 
-  function startOpening(item: InventoryItem) {
+  function startUseOpen(item: InventoryItem) {
     setEditingItem(null)
-    setUsingItem(null)
-    const sl = lookupShelfLife(item.name, item.category)
-    if (sl) {
-      const avgDays = Math.round((sl.min + sl.max) / 2)
-      const d = new Date()
-      d.setDate(d.getDate() + avgDays)
-      setOpeningItem({
-        id: item.id, name: item.name, category: item.category,
-        suggestedExpiry: d.toISOString().split('T')[0],
-        rangeText: sl.min === sl.max ? `${sl.min} days` : `${sl.min}–${sl.max} days`,
-        hasShelfLife: true,
-      })
-    } else {
-      setOpeningItem({ id: item.id, name: item.name, category: item.category, suggestedExpiry: '', rangeText: '', hasShelfLife: false })
+    const maxQty = item.remaining_quantity ?? item.quantity
+    const isFirstOpen = !item.opened_at
+    let suggestedExpiry = '', rangeText = '', acceptExpiry = false
+    if (isFirstOpen) {
+      const sl = lookupShelfLife(item.name, item.category)
+      if (sl) {
+        const avgDays = Math.round((sl.min + sl.max) / 2)
+        const d = new Date(); d.setDate(d.getDate() + avgDays)
+        suggestedExpiry = d.toISOString().split('T')[0]
+        rangeText = sl.min === sl.max ? `${sl.min} days` : `${sl.min}–${sl.max} days`
+        acceptExpiry = true
+      }
     }
+    setUsingItem({ id: item.id, used: 0, unit: item.unit, maxQty, isFirstOpen, suggestedExpiry, rangeText, acceptExpiry })
   }
 
-  async function confirmOpened(updateExpiry: boolean) {
-    if (!openingItem) return
-    const today = new Date().toISOString().split('T')[0]
-    const updates: Record<string, string | null> = { opened_at: today }
-    if (updateExpiry && openingItem.suggestedExpiry) updates.expiry_date = openingItem.suggestedExpiry
-    const { error: updateErr } = await supabase.from('inventory_items').update(updates).eq('id', openingItem.id)
-    if (updateErr) { alert('Error saving: ' + updateErr.message); return }
-    await supabase.from('inventory_events').insert({
-      inventory_item_id: openingItem.id,
-      type: 'opened',
-      notes: openingItem.hasShelfLife ? `Shelf life after opening: ${openingItem.rangeText}` : null,
-    })
-    setOpeningItem(null)
+  async function saveQuickExpiry(dateOverride?: string) {
+    if (!quickExpiryId) return
+    const expiry = dateOverride !== undefined ? dateOverride : quickExpiryDate
+    await supabase.from('inventory_items').update({ expiry_date: expiry || null }).eq('id', quickExpiryId)
+    setQuickExpiryId(null); setQuickExpiryDate('')
     loadItems()
-    const msg = updateExpiry && openingItem.suggestedExpiry ? '✅ Marked as opened — expiry updated!' : '✅ Marked as opened'
-    setToast(msg)
-    setTimeout(() => setToast(null), 2500)
+    setToast('📅 Expiry updated'); setTimeout(() => setToast(null), 2000)
   }
 
   // ── Enrichment helpers ────────────────────────────────────────────────────
@@ -773,36 +775,71 @@ export default function InventoryPage() {
   const partialUsePanel = (item: InventoryItem) => (
     <div style={{ background: '#f4fff6', border: '1.5px solid rgba(76,175,80,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
       <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 10px' }}>
-        How much of <span style={{ color: '#4caf50' }}>{item.name}</span> did you use?
+        {usingItem!.isFirstOpen ? '📦 Use / Open' : '🍽️ Use some'} — <span style={{ color: '#4caf50' }}>{item.name}</span>
       </p>
-      {/* Quick percentage buttons */}
+
+      {/* Opening context */}
+      {usingItem!.isFirstOpen && (
+        <div style={{ background: 'rgba(255,112,67,0.05)', border: '1px solid rgba(255,112,67,0.15)', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px' }}>
+          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#ff7043', margin: '0 0 6px' }}>
+            Opening for the first time — opened_at set to today
+          </p>
+          {usingItem!.suggestedExpiry && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#888' }}>Shelf life {usingItem!.rangeText} →</span>
+              <input type="date" value={usingItem!.suggestedExpiry}
+                onChange={e => setUsingItem({ ...usingItem!, suggestedExpiry: e.target.value })}
+                style={{ border: '2px solid #ffe0cc', borderRadius: '8px', padding: '4px 8px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px' }} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={usingItem!.acceptExpiry}
+                  onChange={e => setUsingItem({ ...usingItem!, acceptExpiry: e.target.checked })}
+                  style={{ accentColor: '#ff7043', width: '14px', height: '14px' }} />
+                <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '12px', color: '#555' }}>Update expiry</span>
+              </label>
+            </div>
+          )}
+        </div>
+      )}
+
+      <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555', margin: '0 0 8px' }}>
+        How much did you <strong>use</strong>?{usingItem!.isFirstOpen && <span style={{ color: '#aaa', fontWeight: 600 }}> (0 = just opening)</span>}
+      </p>
+
       <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+        {usingItem!.isFirstOpen && (
+          <button onClick={() => setUsingItem({ ...usingItem!, used: 0 })}
+            style={{ ...btnBase, flex: 1, background: usingItem!.used === 0 ? '#e8f5e9' : '#f5f5f5', color: usingItem!.used === 0 ? '#388e3c' : '#bbb', border: `1.5px solid ${usingItem!.used === 0 ? 'rgba(76,175,80,0.3)' : 'transparent'}`, padding: '6px 2px', fontSize: '11px' }}>
+            0 (open only)
+          </button>
+        )}
         {[25, 50, 75].map(pct => (
-          <button
-            key={pct}
+          <button key={pct}
             onClick={() => setUsingItem({ ...usingItem!, used: parseFloat(((usingItem!.maxQty * pct) / 100).toFixed(3)) })}
-            style={{ ...btnBase, flex: 1, background: '#e8f5e9', color: '#388e3c', border: '1.5px solid rgba(76,175,80,0.2)', padding: '7px 4px', fontSize: '13px' }}
-          >
-            {pct}%
+            style={{ ...btnBase, flex: 1, background: '#e8f5e9', color: '#388e3c', border: '1.5px solid rgba(76,175,80,0.2)', padding: '7px 4px', fontSize: '12px' }}>
+            Used {pct}%
           </button>
         ))}
-        <button
-          onClick={() => setUsingItem({ ...usingItem!, used: usingItem!.maxQty })}
-          style={{ ...btnBase, flex: 1, background: '#c8e6c9', color: '#2e7d32', border: 'none', padding: '7px 4px', fontSize: '13px' }}
-        >
+        <button onClick={() => setUsingItem({ ...usingItem!, used: usingItem!.maxQty })}
+          style={{ ...btnBase, flex: 1, background: '#c8e6c9', color: '#2e7d32', border: 'none', padding: '7px 4px', fontSize: '12px' }}>
           All
         </button>
       </div>
+
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
-        <input
-          type="number" min={0.1} max={usingItem!.maxQty} step={0.1}
-          value={usingItem!.used}
+        <input type="number" min={0} max={usingItem!.maxQty} step={0.1}
+          value={usingItem!.used || ''}
+          placeholder="0"
           onChange={e => setUsingItem({ ...usingItem!, used: parseFloat(e.target.value) || 0 })}
           style={{ width: '80px', border: '2px solid #c8e6c9', borderRadius: '8px', padding: '7px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', textAlign: 'center' }}
         />
-        <span style={{ fontWeight: 700, color: '#555', fontSize: '14px' }}>{usingItem!.unit}</span>
-        <span style={{ color: '#aaa', fontSize: '12px', fontWeight: 700 }}>of {usingItem!.maxQty} {usingItem!.unit} remaining</span>
+        <span style={{ fontWeight: 700, color: '#555', fontSize: '14px' }}>{usingItem!.unit} used</span>
+        {usingItem!.used > 0 && (
+          <span style={{ color: '#4caf50', fontSize: '12px', fontWeight: 700 }}>
+            → {parseFloat((usingItem!.maxQty - usingItem!.used).toFixed(2))} {usingItem!.unit} will remain
+          </span>
+        )}
       </div>
+
       <div style={{ display: 'flex', gap: '8px' }}>
         <button onClick={markUsedSome} style={{ ...btnBase, background: 'linear-gradient(135deg,#4caf50,#66bb6a)', color: 'white', boxShadow: '0 4px 12px rgba(76,175,80,0.3)' }}>✅ Confirm</button>
         <button onClick={() => setUsingItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
@@ -810,55 +847,12 @@ export default function InventoryPage() {
     </div>
   )
 
-  const openingPanel = (item: InventoryItem) => (
-    <div style={{ background: '#fff8f0', border: '1.5px solid rgba(255,112,67,0.25)', borderRadius: '12px', padding: '14px 16px', marginBottom: '8px' }}>
-      <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '15px', color: '#2d2d2d', margin: '0 0 8px' }}>
-        📦 Marking <span style={{ color: '#ff7043' }}>{item.name}</span> as opened today
-      </p>
-      {openingItem!.hasShelfLife ? (
-        <>
-          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888', margin: '0 0 8px' }}>
-            Typical shelf life after opening: <strong style={{ color: '#ff7043' }}>{openingItem!.rangeText}</strong>
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#888' }}>New expiry:</span>
-            <input
-              type="date"
-              value={openingItem!.suggestedExpiry}
-              onChange={e => setOpeningItem({ ...openingItem!, suggestedExpiry: e.target.value })}
-              style={{ border: '2px solid #ffe0cc', borderRadius: '8px', padding: '6px 10px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px' }}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button onClick={() => confirmOpened(true)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>✅ Update expiry</button>
-            <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'white', color: '#ff7043', border: '1.5px solid rgba(255,112,67,0.3)' }}>📅 Just record opened</button>
-            <button onClick={() => setOpeningItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p style={{ fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#aaa', margin: '0 0 14px' }}>
-            No shelf life data for this item — we'll just record the opened date.
-          </p>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={() => confirmOpened(false)} style={{ ...btnBase, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', boxShadow: '0 4px 12px rgba(255,112,67,0.3)' }}>✅ Record opened</button>
-            <button onClick={() => setOpeningItem(null)} style={{ ...btnBase, background: '#f5f5f5', color: '#888' }}>Cancel</button>
-          </div>
-        </>
-      )}
-    </div>
-  )
-
   const actionArea = (item: InventoryItem) => {
-    if (usingItem?.id === item.id)  return partialUsePanel(item)
-    if (openingItem?.id === item.id) return openingPanel(item)
+    if (usingItem?.id === item.id) return partialUsePanel(item)
     return (
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-        <button onClick={() => { setUsingItem({ id: item.id, used: 1, unit: item.unit, maxQty: item.remaining_quantity ?? item.quantity }); setOpeningItem(null); setEditingItem(null) }} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ {item.opened_at ? 'Use some' : 'Use / Open'}</button>
+        <button onClick={() => startUseOpen(item)} style={{ ...btnBase, background: '#f0fff4', color: '#4caf50' }}>🍽️ {item.opened_at ? 'Use some' : 'Use / Open'}</button>
         <button onClick={() => markUsed(item.id)} style={{ ...btnBase, background: '#e8f5e9', color: '#388e3c' }}>✅ Used all</button>
-        {!item.opened_at && (
-          <button onClick={() => { startOpening(item); setEditingItem(null) }} style={{ ...btnBase, background: '#fff3e0', color: '#e65100' }}>📦 Mark opened</button>
-        )}
         <button onClick={() => markDiscarded(item.id)} style={{ ...btnBase, background: '#fff0f0', color: '#ff4444' }}>🗑️ Discard</button>
         <button onClick={() => {
           setEditingItem({
@@ -880,7 +874,6 @@ export default function InventoryPage() {
             status: item.status,
           })
           setUsingItem(null)
-          setOpeningItem(null)
           setEditModalOpen(true)
         }} style={{ ...btnBase, background: '#fff8f0', color: '#ff7043' }}>✏️ Edit</button>
         <select value={item.location} onChange={(e) => changeLocation(item.id, e.target.value)} style={{ border: '2px solid #eee', borderRadius: '50px', padding: '6px 12px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '13px', color: '#555' }}>
@@ -1236,8 +1229,11 @@ export default function InventoryPage() {
                       <div onClick={() => selectMode ? toggleGroupSelect(group) : setExpandedId(isExpanded ? null : group.name)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={isGroupSelected(group)} partial={isGroupPartial(group)} onToggle={(e) => { e.stopPropagation(); toggleGroupSelect(group) }} />}
                         <ItemHeaderLeft name={group.name} location={group.location} quantity={group.totalQuantity} quantityOriginal={!hasBatches ? repBatch.quantity_original : null} itemCount={!hasBatches ? repBatch.count : null} amountPerUnit={!hasBatches ? repBatch.amount_per_unit : null} unit={group.unit} createdAt={repBatch.created_at} openedAt={openedAt} price={!hasBatches ? repBatch.price : null} retailer={group.retailer} hasBatches={hasBatches} source={!hasBatches ? repBatch.source : undefined} barcode={!hasBatches ? repBatch.barcode : undefined} />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={group.location} />
+                          {group.location !== 'household' && !selectMode && !hasBatches && (
+                            <button onClick={e => { e.stopPropagation(); setQuickExpiryId(group.batches[0].id); setQuickExpiryDate(group.batches[0].expiry_date || '') }} style={{ background: 'none', border: 'none', fontSize: '14px', cursor: 'pointer', padding: '4px', opacity: 0.45, lineHeight: 1 }} title="Quick expiry">📅</button>
+                          )}
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
                         </div>
                       </div>
@@ -1254,7 +1250,12 @@ export default function InventoryPage() {
                                         Batch {bi + 1} — {batch.remaining_quantity ?? batch.quantity} {batch.unit}
                                         {batch.price != null && <span style={{ color: '#d4a96e', marginLeft: '6px' }}>£{batch.price.toFixed(2)}</span>}
                                       </span>
-                                      <ExpiryBadge d={bd} location={batch.location} />
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                        <ExpiryBadge d={bd} location={batch.location} />
+                                        {batch.location !== 'household' && (
+                                          <button onClick={e => { e.stopPropagation(); setQuickExpiryId(batch.id); setQuickExpiryDate(batch.expiry_date || '') }} style={{ background: 'none', border: 'none', fontSize: '12px', cursor: 'pointer', padding: '2px', opacity: 0.45, lineHeight: 1 }} title="Quick expiry">📅</button>
+                                        )}
+                                      </div>
                                     </div>
                                     <p style={{ color: '#ddd', fontSize: '11px', fontWeight: 600, margin: '0 0 8px', fontFamily: "'Nunito',sans-serif" }}>
                                       Added {formatDateAdded(batch.created_at)}
@@ -1291,8 +1292,11 @@ export default function InventoryPage() {
                       <div onClick={() => selectMode ? toggleSelect(item.id) : setExpandedId(isExpanded ? null : item.id)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', cursor: 'pointer', gap: '8px' }}>
                         {selectMode && <SelectBox checked={selectedIds.has(item.id)} onToggle={(e) => { e.stopPropagation(); toggleSelect(item.id) }} />}
                         <ItemHeaderLeft name={item.name} location={item.location} quantity={item.remaining_quantity ?? item.quantity} quantityOriginal={item.quantity_original} itemCount={item.count} amountPerUnit={item.amount_per_unit} unit={item.unit} createdAt={item.created_at} openedAt={item.opened_at} price={item.price} retailer={item.retailer} source={item.source} barcode={item.barcode} />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
                           <ExpiryBadge d={d} location={item.location} />
+                          {item.location !== 'household' && !selectMode && (
+                            <button onClick={e => { e.stopPropagation(); setQuickExpiryId(item.id); setQuickExpiryDate(item.expiry_date || '') }} style={{ background: 'none', border: 'none', fontSize: '14px', cursor: 'pointer', padding: '4px', opacity: 0.45, lineHeight: 1 }} title="Quick expiry">📅</button>
+                          )}
                           {!selectMode && <span style={{ color: '#ccc', fontSize: '16px' }}>{isExpanded ? '▲' : '▼'}</span>}
                         </div>
                       </div>
@@ -1704,6 +1708,30 @@ export default function InventoryPage() {
           </div>
         </div>
       )}
+      {/* ── Quick expiry modal ── */}
+      {quickExpiryId && (
+        <div onClick={() => setQuickExpiryId(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 3500, display: 'flex', alignItems: 'flex-end' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '20px 20px 0 0', padding: '20px 20px 36px', width: '100%', boxSizing: 'border-box' as const, boxShadow: '0 -4px 24px rgba(0,0,0,0.15)', fontFamily: "'Nunito',sans-serif" }}>
+            <div style={{ width: '40px', height: '4px', background: '#eee', borderRadius: '2px', margin: '0 auto 16px' }} />
+            <p style={{ fontFamily: "'Fredoka One',cursive", fontSize: '20px', color: '#ff7043', margin: '0 0 2px' }}>📅 Update Expiry</p>
+            <p style={{ fontWeight: 700, fontSize: '13px', color: '#aaa', margin: '0 0 16px' }}>
+              {items.find(i => i.id === quickExpiryId)?.name}
+            </p>
+            <input type="date" value={quickExpiryDate}
+              onChange={e => setQuickExpiryDate(e.target.value)}
+              style={{ width: '100%', border: '2px solid #eee', borderRadius: '10px', padding: '10px 14px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '15px', boxSizing: 'border-box' as const, marginBottom: '14px' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => saveQuickExpiry()} style={{ flex: 1, background: 'linear-gradient(135deg,#ff7043,#ff9a3c)', color: 'white', border: 'none', borderRadius: '50px', padding: '13px', fontFamily: "'Fredoka One',cursive", fontSize: '16px', cursor: 'pointer', boxShadow: '0 4px 14px rgba(255,112,67,0.35)' }}>Save</button>
+              {quickExpiryDate && (
+                <button onClick={() => saveQuickExpiry('')} style={{ background: '#fff0f0', color: '#ff4444', border: 'none', borderRadius: '50px', padding: '13px 18px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}>Clear</button>
+              )}
+              <button onClick={() => setQuickExpiryId(null)} style={{ background: '#f5f5f5', color: '#888', border: 'none', borderRadius: '50px', padding: '13px 18px', fontFamily: "'Nunito',sans-serif", fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── FAB ── */}
       {!selectMode && (
         <div style={{ position: 'fixed', bottom: '28px', right: '20px', zIndex: 200, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
